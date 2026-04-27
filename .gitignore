@@ -1,0 +1,23 @@
+# env
+.env
+.env.local
+.env.*.local
+
+# node
+node_modules/
+
+# next
+.next/
+out/
+
+# logs
+*.log
+
+# system
+.DS_Store
+Thumbs.db
+
+# keys
+*.pem
+*.key
+*.crt
