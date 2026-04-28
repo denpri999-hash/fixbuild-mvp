@@ -638,7 +638,19 @@ export async function POST(req: NextRequest) {
   try {
     const raw = await req.text()
     const body = JSON.parse(raw)
+console.log('FULL BODY:', JSON.stringify(body, null, 2))
 
+const messageText =
+  body?.messageData?.textMessageData?.textMessage ||
+  body?.messageData?.extendedTextMessageData?.text ||
+  null
+
+const photoUrl =
+  body?.messageData?.fileMessageData?.downloadUrl ||
+  null
+
+console.log('PARSED TEXT:', messageText)
+console.log('PARSED PHOTO:', photoUrl)
     console.log('FULL BODY:', JSON.stringify(body, null, 2))
     console.log('WHATSAPP DEBUG TYPE:', body?.typeWebhook)
     console.log('WHATSAPP DEBUG MESSAGE:', body?.messageData)
