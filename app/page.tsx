@@ -18,6 +18,7 @@ type Task = {
   photo_url: string | null
   status: string | null
   updated_at: string | null
+  company_id: string | null
 }
 
 type Problem = {
@@ -31,6 +32,7 @@ type Problem = {
   is_active: boolean | null
   project_name: string | null
   project_id: string | null
+  company_id: string | null
   stage: string | null
   material: string | null
   reason: string | null
@@ -43,6 +45,7 @@ type Problem = {
 type Project = {
   id: string
   name: string
+  company_id: string | null
 }
 
 type ProblemHistory = {
@@ -146,34 +149,51 @@ export default function Page() {
   const [telegramSending, setTelegramSending] = useState(false)
   const [selectedProblemForHistory, setSelectedProblemForHistory] = useState<string>('all')
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
+  const [companyId, setCompanyId] = useState<string | null>(null)
+  const [urlReady, setUrlReady] = useState(false)
 
   async function fetchTasks() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('tasks')
-      .select('id, title, planned_date, color_indicator, ai_summary, project_name, project_id, sender_name, sender_phone, photo_url, status, updated_at')
+      .select('id, title, planned_date, color_indicator, ai_summary, project_name, project_id, company_id, sender_name, sender_phone, photo_url, status, updated_at')
       .order('updated_at', { ascending: false })
       .limit(300)
 
+    if (companyId) {
+      query = query.eq('company_id', companyId)
+    }
+
+    const { data, error } = await query
     if (error) throw error
     setTasks((data || []) as Task[])
   }
 
   async function fetchProblems() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('problems')
-      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, stage, material, reason, responsible_person, photo_url, problem_key, grouping_key')
+      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, photo_url, problem_key, grouping_key')
       .order('last_seen_at', { ascending: false })
 
+    if (companyId) {
+      query = query.eq('company_id', companyId)
+    }
+
+    const { data, error } = await query
     if (error) throw error
     setProblems((data || []) as Problem[])
   }
 
   async function fetchProjects() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, company_id')
       .order('name', { ascending: true })
 
+    if (companyId) {
+      query = query.eq('company_id', companyId)
+    }
+
+    const { data, error } = await query
     if (error) throw error
     setProjects((data || []) as Project[])
   }
@@ -213,8 +233,17 @@ export default function Page() {
   }
 
   useEffect(() => {
-    fetchAll()
+    const params = new URLSearchParams(window.location.search)
+    setCompanyId(params.get('company_id'))
+    setUrlReady(true)
   }, [])
+
+  useEffect(() => {
+    if (urlReady) {
+      setSelectedProject('all')
+      fetchAll()
+    }
+  }, [urlReady, companyId])
 
   const activeProblemsBase = useMemo(() => {
     return problems
@@ -287,13 +316,18 @@ export default function Page() {
       .slice(0, 5)
   }, [activeProblemsBase])
 
+  const visibleProjectNames = useMemo(() => new Set(projects.map((project) => project.name)), [projects])
+
   const filteredHistory = useMemo(() => {
     let scoped = selectedProject === 'all' ? history : history.filter((h) => h.project_name === selectedProject)
+    if (companyId) {
+      scoped = scoped.filter((h) => h.project_name ? visibleProjectNames.has(h.project_name) : false)
+    }
     if (selectedProblemForHistory !== 'all') {
       scoped = scoped.filter((h) => h.problem_id === selectedProblemForHistory)
     }
     return scoped.filter((h) => isInsideDateRange(h.created_at, dateFrom, dateTo)).slice(0, 25)
-  }, [history, selectedProject, selectedProblemForHistory, dateFrom, dateTo])
+  }, [history, selectedProject, selectedProblemForHistory, dateFrom, dateTo, companyId, visibleProjectNames])
 
   const modalHistory = useMemo(() => {
     if (!historyModalProblem) return []
@@ -304,10 +338,11 @@ export default function Page() {
 
   const filteredMedia = useMemo(() => {
     return media
+      .filter((m) => !companyId || (m.project_name ? visibleProjectNames.has(m.project_name) : false))
       .filter((m) => selectedProject === 'all' || m.project_name === selectedProject)
       .filter((m) => isInsideDateRange(m.created_at, dateFrom, dateTo))
       .slice(0, 20)
-  }, [media, selectedProject, dateFrom, dateTo])
+  }, [media, selectedProject, dateFrom, dateTo, companyId, visibleProjectNames])
 
   const reportText = useMemo(() => {
     const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
@@ -474,6 +509,16 @@ export default function Page() {
         </header>
 
         {errorText ? <div style={errorBox}>{errorText}</div> : null}
+
+        {companyId ? (
+          <div style={clientModeBox}>
+            Режим клиента: данные отфильтрованы по компании. company_id: {companyId}
+          </div>
+        ) : (
+          <div style={warningBox}>
+            Внимание: открыт общий режим. Для клиента используйте ссылку с company_id.
+          </div>
+        )}
 
         <section style={kpiGrid}>
           <KpiCard label="Проблемы" value={redCount} color="#ef4444" />
@@ -825,6 +870,8 @@ const photoImage: CSSProperties = { width: '100%', height: 170, objectFit: 'cove
 const photoMeta: CSSProperties = { padding: 12 }
 const loadingBox: CSSProperties = { background: '#fff', padding: 24, borderRadius: 16, border: '1px solid #e2e8f0' }
 const errorBox: CSSProperties = { background: '#fee2e2', color: '#991b1b', padding: 14, borderRadius: 12, marginBottom: 14, border: '1px solid #fecaca' }
+const clientModeBox: CSSProperties = { background: '#dcfce7', color: '#166534', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #bbf7d0', fontWeight: 700 }
+const warningBox: CSSProperties = { background: '#fef3c7', color: '#92400e', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #fde68a', fontWeight: 700 }
 const modalOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
 const modalCard: CSSProperties = { width: 'min(760px, 100%)', maxHeight: '82vh', overflow: 'auto', background: '#fff', borderRadius: 18, padding: 18, boxShadow: '0 18px 60px rgba(15,23,42,.25)' }
 const modalHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 12 }
