@@ -639,8 +639,14 @@ export async function POST(req: NextRequest) {
     const raw = await req.text()
     const body = JSON.parse(raw)
 
+    console.log('FULL BODY:', JSON.stringify(body, null, 2))
+
     if (body?.typeWebhook !== 'incomingMessageReceived') {
-      return NextResponse.json({ ok: true, skipped: 'not incomingMessageReceived' })
+      return NextResponse.json({
+        ok: true,
+        skipped: 'not incomingMessageReceived',
+        typeWebhook: body?.typeWebhook || null,
+      })
     }
 
     const supabase = getSupabase()
