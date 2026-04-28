@@ -635,34 +635,31 @@ async function addProblemMedia(
 }
 
 export async function POST(req: NextRequest) {
+  let body: any = null
+  let raw = ''
+
   try {
-    const raw = await req.text()
-    const body = JSON.parse(raw)
-console.log('FULL BODY:', JSON.stringify(body, null, 2))
+    raw = await req.text()
+    body = JSON.parse(raw)
+  } catch (e) {
+    console.error('PARSE ERROR:', e)
+    return NextResponse.json({ ok: false, error: 'invalid json' }, { status: 200 })
+  }
 
-const messageText =
-  body?.messageData?.textMessageData?.textMessage ||
-  body?.messageData?.extendedTextMessageData?.text ||
-  null
+  console.log('FULL BODY:', JSON.stringify(body, null, 2))
+  console.log('WHATSAPP DEBUG TYPE:', body?.typeWebhook)
+  console.log('WHATSAPP DEBUG MESSAGE:', body?.messageData)
+  console.log('WHATSAPP DEBUG SENDER:', body?.senderData)
 
-const photoUrl =
-  body?.messageData?.fileMessageData?.downloadUrl ||
-  null
+  if (body?.typeWebhook !== 'incomingMessageReceived') {
+    return NextResponse.json({
+      ok: true,
+      skipped: 'not incomingMessageReceived',
+      typeWebhook: body?.typeWebhook || null,
+    })
+  }
 
-console.log('PARSED TEXT:', messageText)
-console.log('PARSED PHOTO:', photoUrl)
-    console.log('FULL BODY:', JSON.stringify(body, null, 2))
-    console.log('WHATSAPP DEBUG TYPE:', body?.typeWebhook)
-    console.log('WHATSAPP DEBUG MESSAGE:', body?.messageData)
-    console.log('WHATSAPP DEBUG SENDER:', body?.senderData)
-    if (body?.typeWebhook !== 'incomingMessageReceived') {
-      return NextResponse.json({
-        ok: true,
-        skipped: 'not incomingMessageReceived',
-        typeWebhook: body?.typeWebhook || null,
-      })
-    }
-
+  try {
     const supabase = getSupabase()
 
     const rawSenderPhone =
@@ -673,11 +670,18 @@ console.log('PARSED PHOTO:', photoUrl)
       ''
 
     const senderPhone = normalizePhone(rawSenderPhone)
+
     const senderNameFromWebhook =
       body?.senderData?.senderName ||
       body?.senderData?.chatName ||
       body?.senderName ||
       'Не указан'
+
+    const incomingText = sanitizeTitle(getIncomingText(body))
+    const type = body?.messageData?.typeMessage
+
+    console.log('PARSED TEXT:', incomingText)
+    console.log('TYPE MESSAGE:', type)
 
     const employee = await findEmployeeByPhone(supabase, senderPhone)
 
@@ -690,17 +694,19 @@ console.log('PARSED PHOTO:', photoUrl)
     })
 
     if (!employee?.id || !employee?.company_id) {
-      const unknownText = sanitizeTitle(getIncomingText(body)) || body?.messageData?.fileMessageData?.caption || ''
-
-      await supabase.from('unknown_whatsapp_messages').insert([
-        {
-          sender_phone: senderPhone || null,
-          normalized_phone: senderPhone || null,
-          sender_name: senderNameFromWebhook || null,
-          message_text: unknownText || null,
-          raw_payload: body,
-        },
-      ])
+      try {
+        await supabase.from('unknown_whatsapp_messages').insert([
+          {
+            sender_phone: senderPhone || null,
+            normalized_phone: senderPhone || null,
+            sender_name: senderNameFromWebhook || null,
+            message_text: incomingText || null,
+            raw_payload: body,
+          },
+        ])
+      } catch (unknownError) {
+        console.error('UNKNOWN MESSAGE SAVE ERROR:', unknownError)
+      }
 
       return NextResponse.json({
         ok: true,
@@ -714,25 +720,26 @@ console.log('PARSED PHOTO:', photoUrl)
     const companyId = employee.company_id
     const senderName = employee.name || senderNameFromWebhook
 
-    const incomingText = sanitizeTitle(getIncomingText(body))
-    const type = body?.messageData?.typeMessage
-
-    const baseTextForProject = incomingText || body?.messageData?.fileMessageData?.caption || ''
+    const baseTextForProject = incomingText || ''
     const detectedProjectName = detectProjectName(baseTextForProject)
     const project = await ensureProject(supabase, detectedProjectName, companyId)
     const projectName = project?.name || detectedProjectName
 
-    console.log('TYPE WEBHOOK:', body?.typeWebhook)
-    console.log('TYPE MESSAGE:', body?.messageData?.typeMessage)
-    console.log('MESSAGE DATA FULL:', JSON.stringify(body?.messageData || {}, null, 2))
+    console.log('PROJECT:', {
+      id: project?.id,
+      name: projectName,
+      companyId,
+    })
 
     let photoUrl: string | null = null
+
     try {
       photoUrl = await uploadPhotoIfAny(supabase, body, projectName)
-      console.log('PHOTO URL RESULT:', photoUrl)
     } catch (mediaError) {
-      console.error('Photo upload error:', mediaError)
+      console.error('PHOTO UPLOAD ERROR:', mediaError)
     }
+
+    console.log('PHOTO URL RESULT:', photoUrl)
 
     let title = incomingText
     let detectedKind: 'done' | 'problem' | 'risk' | 'normal' = 'normal'
@@ -755,7 +762,11 @@ console.log('PARSED PHOTO:', photoUrl)
       color = 'yellow'
       summary = 'Ожидает расшифровки'
     } else {
-      return NextResponse.json({ ok: true, skipped: `unsupported type ${type}` })
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: `unsupported type ${type}`,
+      })
     }
 
     const cleanedText = stripProjectMentions(title)
@@ -782,6 +793,8 @@ console.log('PARSED PHOTO:', photoUrl)
       status: 'active',
     }
 
+    console.log('INSERTING TASK:', taskPayload)
+
     const { data: insertedTask, error: taskError } = await supabase
       .from('tasks')
       .insert([taskPayload])
@@ -790,7 +803,7 @@ console.log('PARSED PHOTO:', photoUrl)
 
     if (taskError) {
       console.error('TASK INSERT ERROR:', taskError)
-      return NextResponse.json({ ok: false, error: taskError.message }, { status: 500 })
+      return NextResponse.json({ ok: false, error: taskError.message }, { status: 200 })
     }
 
     const taskId = insertedTask?.id || null
@@ -1061,6 +1074,9 @@ console.log('PARSED PHOTO:', photoUrl)
     return NextResponse.json({ ok: true, inserted: insertedTask })
   } catch (e: any) {
     console.error('WHATSAPP ROUTE ERROR:', e)
-    return NextResponse.json({ ok: false, error: e?.message || 'route failed' }, { status: 500 })
+    return NextResponse.json(
+      { ok: false, error: e?.message || 'route failed' },
+      { status: 200 }
+    )
   }
 }
