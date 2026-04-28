@@ -640,7 +640,9 @@ export async function POST(req: NextRequest) {
     const body = JSON.parse(raw)
 
     console.log('FULL BODY:', JSON.stringify(body, null, 2))
-
+    console.log('WHATSAPP DEBUG TYPE:', body?.typeWebhook)
+    console.log('WHATSAPP DEBUG MESSAGE:', body?.messageData)
+    console.log('WHATSAPP DEBUG SENDER:', body?.senderData)
     if (body?.typeWebhook !== 'incomingMessageReceived') {
       return NextResponse.json({
         ok: true,
