@@ -21,3 +21,6 @@ Thumbs.db
 *.pem
 *.key
 *.crt
+
+backups/
+backups/
