@@ -469,6 +469,31 @@ async function findEmployeeByPhone(supabase: any, phone: string) {
   return data || null
 }
 
+async function findCompanyByGreenInstance(supabase: any, body: any) {
+  const idInstance =
+    body?.idInstance ||
+    body?.instanceData?.idInstance ||
+    body?.instanceData?.idinstance ||
+    body?.instanceData?.id_instance ||
+    null
+
+  if (!idInstance) return null
+
+  const { data, error } = await supabase
+    .from('whatsapp_instances')
+    .select('company_id, id_instance, phone, is_active')
+    .eq('id_instance', String(idInstance))
+    .eq('is_active', true)
+    .maybeSingle()
+
+  if (error) {
+    console.error('FIND WHATSAPP INSTANCE ERROR:', error)
+    return null
+  }
+
+  return data || null
+}
+
 function getMediaInfo(body: any) {
   const type = body?.messageData?.typeMessage
   const fileData =
@@ -683,17 +708,33 @@ export async function POST(req: NextRequest) {
     console.log('PARSED TEXT:', incomingText)
     console.log('TYPE MESSAGE:', type)
 
+    const whatsappInstance = await findCompanyByGreenInstance(supabase, body)
     const employee = await findEmployeeByPhone(supabase, senderPhone)
 
-    console.log('EMPLOYEE LOOKUP:', {
+    const companyId =
+      whatsappInstance?.company_id ||
+      employee?.company_id ||
+      null
+
+    const employeeId = employee?.id || null
+    const senderName = employee?.name || senderNameFromWebhook
+
+    console.log('ROUTING LOOKUP:', {
+      idInstance:
+        body?.idInstance ||
+        body?.instanceData?.idInstance ||
+        body?.instanceData?.idinstance ||
+        body?.instanceData?.id_instance ||
+        null,
+      companyFromInstance: whatsappInstance?.company_id || null,
       rawSenderPhone,
       senderPhone,
-      found: Boolean(employee),
-      employeeId: employee?.id || null,
-      companyId: employee?.company_id || null,
+      employeeFound: Boolean(employee),
+      employeeId,
+      companyId,
     })
 
-    if (!employee?.id || !employee?.company_id) {
+    if (!companyId) {
       try {
         await supabase.from('unknown_whatsapp_messages').insert([
           {
@@ -711,14 +752,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         ignored: true,
-        reason: 'unknown_employee',
+        reason: 'no_company_found',
         senderPhone,
       })
     }
-
-    const employeeId = employee.id
-    const companyId = employee.company_id
-    const senderName = employee.name || senderNameFromWebhook
 
     const baseTextForProject = incomingText || ''
     const detectedProjectName = detectProjectName(baseTextForProject)
