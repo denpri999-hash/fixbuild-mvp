@@ -758,21 +758,20 @@ export async function POST(req: NextRequest) {
         console.error('UNKNOWN MESSAGE SAVE ERROR:', unknownError)
       }
 
-      const unassignedTaskPayload = {
-        title: incomingText || 'Новое сообщение WhatsApp',
-        ai_summary:
-          'Новое сообщение от непривязанного номера. Требуется назначить компанию/объект.',
-        color_indicator: 'yellow',
-        project_name: 'Не определён',
-        sender_name: senderName || 'Неизвестный отправитель',
-        sender_phone: senderPhone || null,
-        planned_date: new Date().toISOString().slice(0, 10),
-        status: 'active',
-      }
-
-      const { error: unassignedTaskError } = await supabase
-        .from('tasks')
-        .insert([unassignedTaskPayload])
+      const { error: unassignedTaskError } = await supabase.from('tasks').upsert(
+        {
+          title: incomingText || 'Новое сообщение WhatsApp',
+          ai_summary:
+            'Новое сообщение от непривязанного номера. Требуется назначить компанию/объект.',
+          color_indicator: 'yellow',
+          project_name: 'Не определён',
+          sender_name: senderName || 'Неизвестный отправитель',
+          sender_phone: senderPhone || null,
+        },
+        {
+          onConflict: 'sender_phone',
+        }
+      )
 
       if (unassignedTaskError) {
         console.error('UNASSIGNED TASK INSERT ERROR:', unassignedTaskError)
