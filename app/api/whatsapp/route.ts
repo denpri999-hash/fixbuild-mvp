@@ -660,6 +660,15 @@ async function addProblemMedia(
 }
 
 export async function POST(req: NextRequest) {
+  const secret = req.nextUrl.searchParams.get('secret')
+
+  if (secret !== process.env.WEBHOOK_SECRET) {
+    return NextResponse.json(
+      { ok: false, error: 'unauthorized' },
+      { status: 401 }
+    )
+  }
+
   let body: any = null
   let raw = ''
 
