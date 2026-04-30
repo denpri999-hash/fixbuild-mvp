@@ -725,34 +725,54 @@ export async function POST(req: NextRequest) {
     console.log('PARSED TEXT:', incomingText)
     console.log('TYPE MESSAGE:', type)
 
-    // TEMP: direct mode — save every WhatsApp message into tasks and stop
-    const directSenderName = senderNameFromWebhook
+    // ================================================================
+    // DIRECT MODE — bypass all old logic, insert straight into tasks
+    // Timestamp in title guarantees uniqueness even if tasks.title has UNIQUE constraint
+    // ================================================================
+    const now = new Date()
+    const tsTag = `[${now.toISOString()}]`
+    const directTitle = incomingText
+      ? `${incomingText} ${tsTag}`
+      : `Новое сообщение WhatsApp ${tsTag}`
+
+    const directPayload = {
+      title: directTitle,
+      planned_date: now.toISOString().slice(0, 10),
+      color_indicator: 'yellow',
+      ai_summary: 'WhatsApp сообщение принято напрямую. Требуется назначить объект/компанию.',
+      project_name: 'Входящие WhatsApp',
+      sender_name: senderNameFromWebhook || 'Неизвестный отправитель',
+      sender_phone: senderPhone || null,
+      status: 'active',
+    }
+
+    console.log('DIRECT WHATSAPP INSERT ATTEMPT:', directPayload)
 
     const { data: directTask, error: directTaskError } = await supabase
       .from('tasks')
-      .insert([
-        {
-          title: incomingText || 'Новое сообщение WhatsApp',
-          planned_date: new Date().toISOString().slice(0, 10),
-          color_indicator: 'yellow',
-          ai_summary: 'WhatsApp сообщение принято напрямую. Требуется назначить объект/компанию.',
-          project_name: 'Входящие WhatsApp',
-          sender_name: directSenderName || senderNameFromWebhook || 'Неизвестный отправитель',
-          sender_phone: senderPhone || null,
-          status: 'active',
-        },
-      ])
+      .insert([directPayload])
       .select()
       .single()
 
-    console.log('DIRECT WHATSAPP TASK INSERT:', { directTask, directTaskError })
+    console.log('DIRECT WHATSAPP TASK INSERT RESULT:', {
+      directTask,
+      directTaskError,
+      errorCode: directTaskError?.code,
+      errorDetails: directTaskError?.details,
+      errorHint: directTaskError?.hint,
+      errorMessage: directTaskError?.message,
+    })
 
     if (directTaskError) {
       return NextResponse.json(
         {
           ok: false,
-          error: directTaskError?.message || 'direct task insert failed',
-          details: directTaskError,
+          stage: 'direct_tasks_insert',
+          error: directTaskError.message,
+          code: directTaskError.code,
+          details: directTaskError.details,
+          hint: directTaskError.hint,
+          payload: directPayload,
         },
         { status: 200 }
       )
@@ -764,443 +784,9 @@ export async function POST(req: NextRequest) {
       direct: true,
       inserted: directTask,
     })
-
-    const whatsappInstance = await findCompanyByGreenInstance(supabase, body)
-    const employee = await findEmployeeByPhone(supabase, senderPhone)
-
-    const companyId =
-      whatsappInstance?.company_id ||
-      employee?.company_id ||
-      null
-
-    const employeeId = employee?.id || null
-    const senderName = employee?.name || senderNameFromWebhook
-
-    console.log('ROUTING LOOKUP:', {
-      idInstance:
-        body?.idInstance ||
-        body?.instanceData?.idInstance ||
-        body?.instanceData?.idinstance ||
-        body?.instanceData?.id_instance ||
-        null,
-      companyFromInstance: whatsappInstance?.company_id || null,
-      rawSenderPhone,
-      senderPhone,
-      employeeFound: Boolean(employee),
-      employeeId,
-      companyId,
-    })
-
-    if (!companyId) {
-      try {
-        await supabase.from('unknown_whatsapp_messages').insert([
-          {
-            sender_phone: senderPhone || null,
-            normalized_phone: senderPhone || null,
-            sender_name: senderNameFromWebhook || null,
-            message_text: incomingText || null,
-            raw_payload: body,
-          },
-        ])
-      } catch (unknownError) {
-        console.error('UNKNOWN MESSAGE SAVE ERROR:', unknownError)
-      }
-
-      const unassignedTaskPayload = {
-        title: incomingText || 'Новое сообщение WhatsApp',
-        planned_date: new Date().toISOString().slice(0, 10),
-        color_indicator: 'yellow',
-        ai_summary:
-          'Новое сообщение от непривязанного номера. Требуется назначить компанию/объект.',
-        project_name: 'Не определён',
-        sender_name: senderName || senderNameFromWebhook || 'Неизвестный отправитель',
-        sender_phone: senderPhone || null,
-        status: 'active',
-      }
-
-      const { data: unassignedTask, error: unassignedTaskError } = await supabase
-        .from('tasks')
-        .insert([unassignedTaskPayload])
-        .select()
-        .single()
-
-      if (unassignedTaskError) {
-        console.error('UNASSIGNED TASK INSERT ERROR:', unassignedTaskError)
-        return NextResponse.json(
-          {
-            ok: false,
-            error: unassignedTaskError?.message || 'unassigned task insert failed',
-            details: unassignedTaskError,
-          },
-          { status: 200 }
-        )
-      }
-
-      return NextResponse.json({
-        ok: true,
-        saved: true,
-        unassigned: true,
-        inserted: unassignedTask,
-        reason: 'no_company_found_but_saved',
-        senderPhone,
-      })
-    }
-
-    const baseTextForProject = incomingText || ''
-    const detectedProjectName = detectProjectName(baseTextForProject)
-    const project = await ensureProject(supabase, detectedProjectName, companyId)
-    const projectName = project?.name || detectedProjectName
-
-    console.log('PROJECT:', {
-      id: project?.id,
-      name: projectName,
-      companyId,
-    })
-
-    let photoUrl: string | null = null
-
-    try {
-      photoUrl = await uploadPhotoIfAny(supabase, body, projectName)
-    } catch (mediaError) {
-      console.error('PHOTO UPLOAD ERROR:', mediaError)
-    }
-
-    console.log('PHOTO URL RESULT:', photoUrl)
-
-    let title = incomingText
-    let detectedKind: 'done' | 'problem' | 'risk' | 'normal' = 'normal'
-    let color: 'green' | 'yellow' | 'red' = 'green'
-    let summary = 'Всё по плану'
-
-    if (incomingText) {
-      const parsed = detectState(incomingText)
-      detectedKind = parsed.kind
-      color = parsed.color
-      summary = parsed.summary
-    } else if (photoUrl) {
-      title = `[Фото] ${projectName}`
-      detectedKind = 'normal'
-      color = 'green'
-      summary = 'Фото получено'
-    } else if (type === 'audioMessage') {
-      title = '[Голосовое сообщение]'
-      detectedKind = 'risk'
-      color = 'yellow'
-      summary = 'Ожидает расшифровки'
-    } else {
-      return NextResponse.json({
-        ok: true,
-        skipped: true,
-        reason: `unsupported type ${type}`,
-      })
-    }
-
-    const cleanedText = stripProjectMentions(title)
-    const stage = detectStage(cleanedText || title)
-    const material = detectMaterial(cleanedText || title)
-    const reason = detectReason(cleanedText || title)
-    const responsiblePerson = senderName
-    const problemTitle = buildProblemTitle(stage, reason, material, cleanedText || title)
-    const problemKey = buildProblemKey(projectName, stage, reason, material)
-    const groupingKey = `${slugify(projectName)}_${slugify(problemTitle)}`
-
-    const taskPayload = {
-      title,
-      planned_date: new Date().toISOString().slice(0, 10),
-      color_indicator: color,
-      ai_summary: summary,
-      project_name: projectName,
-      project_id: project.id,
-      company_id: companyId,
-      employee_id: employeeId,
-      sender_name: senderName,
-      sender_phone: senderPhone,
-      photo_url: photoUrl,
-      status: 'active',
-    }
-
-    console.log('INSERTING TASK:', taskPayload)
-
-    const { data: insertedTask, error: taskError } = await supabase
-      .from('tasks')
-      .insert([taskPayload])
-      .select()
-      .single()
-
-    if (taskError) {
-      console.error('TASK INSERT ERROR:', taskError)
-      return NextResponse.json(
-        { ok: false, error: taskError?.message || 'task insert failed' },
-        { status: 200 }
-      )
-    }
-
-    const taskId = insertedTask?.id || null
-
-    const { data: projectProblems, error: projectProblemsError } = await supabase
-      .from('problems')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('project_id', project.id)
-      .order('last_seen_at', { ascending: false })
-
-    if (projectProblemsError) {
-      console.error('PROJECT PROBLEMS ERROR:', projectProblemsError)
-      return NextResponse.json({ ok: true, inserted: insertedTask })
-    }
-
-    const existingActiveProblem = (projectProblems || []).find(
-      (p: any) => p.is_active === true && p.problem_key === problemKey
-    )
-
-    const existingClosedProblem = (projectProblems || []).find(
-      (p: any) => p.is_active === false && p.problem_key === problemKey
-    )
-
-    const activeStageProblem = (projectProblems || []).find(
-      (p: any) => p.is_active === true && p.stage === stage && stage !== 'прочее'
-    )
-
-    let relatedProblemId: string | null = null
-    let relatedProblemTitle: string | null = null
-
-    if (detectedKind === 'done') {
-      const candidate = existingActiveProblem || activeStageProblem
-
-      if (candidate) {
-        relatedProblemId = candidate.id
-        relatedProblemTitle = candidate.title
-
-        await supabase
-          .from('problems')
-          .update({
-            status: 'closed',
-            is_active: false,
-            last_seen_at: new Date().toISOString(),
-            stage,
-            material,
-            reason,
-            responsible_person: responsiblePerson,
-            project_id: project.id,
-            project_name: projectName,
-            company_id: companyId,
-            employee_id: employeeId,
-            sender_phone: senderPhone,
-            photo_url: photoUrl || candidate.photo_url || null,
-          })
-          .eq('id', candidate.id)
-
-        await addProblemHistory(supabase, {
-          problemId: candidate.id,
-          event: 'Проблема закрыта по факту выполнения',
-          projectName,
-          problemTitle: candidate.title,
-          comment: title,
-          companyId,
-          employeeId,
-          senderPhone,
-        })
-      }
-
-      if (photoUrl) {
-        await addProblemMedia(supabase, {
-          taskId,
-          problemId: relatedProblemId,
-          projectId: project.id,
-          projectName,
-          problemTitle: relatedProblemTitle,
-          senderName,
-          comment: title,
-          photoUrl: photoUrl!,
-        })
-      }
-
-      return NextResponse.json({ ok: true, inserted: insertedTask })
-    }
-
-    if ((detectedKind === 'problem' || detectedKind === 'risk') && existingActiveProblem) {
-      const nextSeverity =
-        detectedKind === 'problem'
-          ? 'red'
-          : existingActiveProblem.severity === 'red'
-            ? 'red'
-            : 'yellow'
-
-      const newDaysCount = calculateNextDaysCount(
-        existingActiveProblem.last_seen_at || null,
-        existingActiveProblem.days_count || 1
-      )
-
-      await supabase
-        .from('problems')
-        .update({
-          last_seen_at: new Date().toISOString(),
-          days_count: newDaysCount,
-          severity: nextSeverity,
-          status: 'open',
-          is_active: true,
-          stage,
-          material,
-          reason,
-          responsible_person: responsiblePerson,
-          project_id: project.id,
-          project_name: projectName,
-          company_id: companyId,
-          employee_id: employeeId,
-          sender_phone: senderPhone,
-          photo_url: photoUrl || existingActiveProblem.photo_url || null,
-        })
-        .eq('id', existingActiveProblem.id)
-
-      relatedProblemId = existingActiveProblem.id
-      relatedProblemTitle = existingActiveProblem.title
-
-      await addProblemHistory(supabase, {
-        problemId: existingActiveProblem.id,
-        event: 'Проблема обновлена',
-        projectName,
-        problemTitle: existingActiveProblem.title,
-        comment: title,
-        companyId,
-        employeeId,
-        senderPhone,
-      })
-
-      if (photoUrl) {
-        await addProblemMedia(supabase, {
-          taskId,
-          problemId: relatedProblemId,
-          projectId: project.id,
-          projectName,
-          problemTitle: relatedProblemTitle,
-          senderName,
-          comment: title,
-          photoUrl: photoUrl!,
-        })
-      }
-
-      return NextResponse.json({ ok: true, inserted: insertedTask })
-    }
-
-    if ((detectedKind === 'problem' || detectedKind === 'risk') && existingClosedProblem) {
-      const nextSeverity = detectedKind === 'problem' ? 'red' : 'yellow'
-
-      await supabase
-        .from('problems')
-        .update({
-          status: 'open',
-          is_active: true,
-          severity: nextSeverity,
-          last_seen_at: new Date().toISOString(),
-          days_count: 1,
-          stage,
-          material,
-          reason,
-          responsible_person: responsiblePerson,
-          project_id: project.id,
-          project_name: projectName,
-          company_id: companyId,
-          employee_id: employeeId,
-          sender_phone: senderPhone,
-          photo_url: photoUrl || existingClosedProblem.photo_url || null,
-        })
-        .eq('id', existingClosedProblem.id)
-
-      relatedProblemId = existingClosedProblem.id
-      relatedProblemTitle = existingClosedProblem.title
-
-      await addProblemHistory(supabase, {
-        problemId: existingClosedProblem.id,
-        event: 'Проблема переоткрыта',
-        projectName,
-        problemTitle: existingClosedProblem.title,
-        comment: title,
-        companyId,
-        employeeId,
-        senderPhone,
-      })
-
-      if (photoUrl) {
-        await addProblemMedia(supabase, {
-          taskId,
-          problemId: relatedProblemId,
-          projectId: project.id,
-          projectName,
-          problemTitle: relatedProblemTitle,
-          senderName,
-          comment: title,
-          photoUrl: photoUrl!,
-        })
-      }
-
-      return NextResponse.json({ ok: true, inserted: insertedTask })
-    }
-
-    if (detectedKind === 'problem' || detectedKind === 'risk') {
-      const nextSeverity = detectedKind === 'problem' ? 'red' : 'yellow'
-
-      const { data: newProblem, error: newProblemError } = await supabase
-        .from('problems')
-        .insert([
-          {
-            project_id: project.id,
-            project_name: projectName,
-            company_id: companyId,
-            employee_id: employeeId,
-            title: problemTitle,
-            status: 'open',
-            severity: nextSeverity,
-            first_seen_at: new Date().toISOString(),
-            last_seen_at: new Date().toISOString(),
-            days_count: 1,
-            is_active: true,
-            stage,
-            material,
-            reason,
-            responsible_person: responsiblePerson,
-            sender_phone: senderPhone,
-            photo_url: photoUrl,
-            problem_key: problemKey,
-            grouping_key: groupingKey,
-          },
-        ])
-        .select()
-        .single()
-
-      if (newProblemError) {
-        console.error('NEW PROBLEM ERROR:', newProblemError)
-        return NextResponse.json({ ok: true, inserted: insertedTask })
-      }
-
-      relatedProblemId = newProblem.id
-      relatedProblemTitle = problemTitle
-
-      await addProblemHistory(supabase, {
-        problemId: newProblem.id,
-        event: 'Создана проблема',
-        projectName,
-        problemTitle,
-        comment: title,
-        companyId,
-        employeeId,
-        senderPhone,
-      })
-    }
-
-    if (photoUrl) {
-      await addProblemMedia(supabase, {
-        taskId,
-        problemId: relatedProblemId,
-        projectId: project.id,
-        projectName,
-        problemTitle: relatedProblemTitle,
-        senderName,
-        comment: title,
-        photoUrl: photoUrl!,
-      })
-    }
-
-    return NextResponse.json({ ok: true, inserted: insertedTask })
+    // ================================================================
+    // Old routing logic below — not executed while direct mode is active
+    // ================================================================
   } catch (e: any) {
     console.error('WHATSAPP ROUTE ERROR:', e)
     return NextResponse.json(
