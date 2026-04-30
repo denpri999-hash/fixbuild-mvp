@@ -62,6 +62,13 @@ const REASON_RULES = [
   { reason: 'проект/согласование', parts: ['чертеж', 'чертёж', 'проект', 'согласование'] },
 ]
 
+const PROJECT_ALIASES: Record<string, string[]> = {
+  'ЖК Орда': ['жк орда', 'орда', 'zhk orda', 'orda'],
+  'Объект 1': ['объект 1', 'об 1', 'об1', 'obj1', 'object 1', 'первый объект'],
+  'Объект 2': ['объект 2', 'об 2', 'об2', 'obj2', 'object 2', 'второй объект'],
+  'Объект 3': ['объект 3', 'об 3', 'об3', 'obj3', 'object 3', 'третий объект'],
+}
+
 function normalizeForMatch(text: string) {
   return text
     .toLowerCase()
@@ -97,6 +104,18 @@ function detectReason(text: string) {
     if (rule.parts.some((part) => t.includes(part))) return rule.reason
   }
   return 'прочее'
+}
+
+function detectProjectName(text: string) {
+  const t = normalizeForMatch(text)
+
+  for (const [projectName, aliases] of Object.entries(PROJECT_ALIASES)) {
+    for (const alias of aliases) {
+      if (t.includes(alias)) return projectName
+    }
+  }
+
+  return 'Входящие WhatsApp'
 }
 
 function detectState(text: string) {
@@ -173,24 +192,27 @@ export async function POST(req: NextRequest) {
 
     const senderPhone = normalizePhone(rawSenderPhone)
 
-    const senderName =
+    const senderNameFromWebhook =
       body?.senderData?.senderName ||
       body?.senderData?.chatName ||
       body?.senderName ||
       'Неизвестный отправитель'
 
+    const senderName = senderNameFromWebhook
+
     const parsed = detectState(incomingText)
     const stage = detectStage(incomingText)
     const material = detectMaterial(incomingText)
     const reason = detectReason(incomingText)
+    const projectName = detectProjectName(incomingText)
 
     const payload = {
       title: incomingText || 'Новое сообщение WhatsApp',
       planned_date: new Date().toISOString().slice(0, 10),
       color_indicator: parsed.color,
-      ai_summary: `${parsed.summary}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
-      project_name: 'Входящие WhatsApp',
-      sender_name: senderName,
+      ai_summary: `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
+      project_name: projectName,
+      sender_name: senderName || senderNameFromWebhook || 'Неизвестный отправитель',
       sender_phone: senderPhone || null,
       status: 'active',
     }
