@@ -32,6 +32,35 @@ function getIncomingText(body: any) {
   ).trim()
 }
 
+function detectColor(text: string): 'green' | 'yellow' | 'red' {
+  const t = text.toLowerCase()
+
+  if (
+    t.includes('срыв') ||
+    t.includes('просрочка') ||
+    t.includes('не успели') ||
+    t.includes('не сделали') ||
+    t.includes('сломался') ||
+    t.includes('авария')
+  ) {
+    return 'red'
+  }
+
+  if (
+    t.includes('нет материала') ||
+    t.includes('задержка') ||
+    t.includes('ждем') ||
+    t.includes('ждём') ||
+    t.includes('риск') ||
+    t.includes('почти') ||
+    t.includes('частично')
+  ) {
+    return 'yellow'
+  }
+
+  return 'green'
+}
+
 export async function POST(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
 
@@ -43,7 +72,16 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const supabase = getSupabase()
 
+    if (body?.typeWebhook && body.typeWebhook !== 'incomingMessageReceived') {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        typeWebhook: body.typeWebhook,
+      })
+    }
+
     const incomingText = getIncomingText(body)
+
     const rawSenderPhone =
       body?.senderData?.sender ||
       body?.senderData?.chatId ||
@@ -52,18 +90,19 @@ export async function POST(req: NextRequest) {
       ''
 
     const senderPhone = normalizePhone(rawSenderPhone)
+
     const senderName =
       body?.senderData?.senderName ||
       body?.senderData?.chatName ||
       body?.senderName ||
       'Неизвестный отправитель'
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const color = detectColor(incomingText)
 
     const payload = {
-      title: `${incomingText || 'Новое сообщение WhatsApp'} [${uniqueSuffix}]`,
+      title: incomingText || 'Новое сообщение WhatsApp',
       planned_date: new Date().toISOString().slice(0, 10),
-      color_indicator: 'yellow',
+      color_indicator: color,
       ai_summary: 'WhatsApp сообщение принято напрямую. Требуется назначить объект/компанию.',
       project_name: 'Входящие WhatsApp',
       sender_name: senderName,
