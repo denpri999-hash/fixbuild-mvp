@@ -532,23 +532,25 @@ function getMediaInfo(body: any) {
 }
 
 async function ensureProject(supabase: any, projectName: string, companyId: string) {
-  const { data: exact } = await supabase
-    .from('projects')
-    .select('id, name, company_id')
-    .eq('company_id', companyId)
-    .eq('name', projectName)
-    .maybeSingle()
+  const isDuplicateKeyError = (err: any) => {
+    const code = err?.code || err?.error_code || err?.statusCode
+    return String(code) === '23505' || String(err?.message || '').includes('23505')
+  }
 
-  if (exact) return exact
+  const selectByName = async () => {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('id, name, company_id')
+      .eq('name', projectName)
+      .limit(1)
+      .maybeSingle()
 
-  const { data: fallback } = await supabase
-    .from('projects')
-    .select('id, name, company_id')
-    .eq('company_id', companyId)
-    .limit(1)
-    .maybeSingle()
+    if (error) throw error
+    return data || null
+  }
 
-  if (fallback) return fallback
+  const existing = await selectByName()
+  if (existing) return existing
 
   const { data: created, error } = await supabase
     .from('projects')
@@ -556,8 +558,14 @@ async function ensureProject(supabase: any, projectName: string, companyId: stri
     .select('id, name, company_id')
     .single()
 
-  if (error) throw error
-  return created
+  if (!error) return created
+
+  if (isDuplicateKeyError(error)) {
+    const afterDup = await selectByName()
+    if (afterDup) return afterDup
+  }
+
+  throw error
 }
 
 async function uploadPhotoIfAny(supabase: any, body: any, projectName: string) {
