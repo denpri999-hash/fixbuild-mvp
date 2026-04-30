@@ -678,7 +678,7 @@ export async function POST(req: NextRequest) {
       title: incomingText || 'Новое сообщение WhatsApp',
       planned_date: new Date().toISOString().slice(0, 10),
       color_indicator: parsed.color,
-      ai_summary: `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
+      ai_summary: `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${problemKey}`,
       project_name: projectName,
       stage,
       deviation_reason: reason,
@@ -691,35 +691,40 @@ export async function POST(req: NextRequest) {
     // 2) Close problem: if green or message indicates completion, close last active red/yellow task by project+stage (14 days)
     if (isClosingMessage(incomingText, parsed.color)) {
       try {
-        const { data: candidates, error: candidatesError } = await findRecentActiveProblemTasks(supabase, {
-          projectName,
-          days: 14,
-        })
+        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
 
-        if (candidatesError) {
-          console.error('CLOSE SELECT ERROR:', candidatesError)
-        } else {
-          const toClose = (candidates || []).find((t: any) => taskMatchesClose(t, stage))
+        const { data: toClose, error: closeSelectError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('project_name', projectName)
+          .eq('status', 'active')
+          .in('color_indicator', ['red', 'yellow'])
+          .ilike('ai_summary', `%Этап: ${stage}%`)
+          .gte('created_at', fourteenDaysAgo)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
 
-          if (toClose?.id) {
-            const { data: closedTask, error: closeError } = await supabase
-              .from('tasks')
-              .update({
-                status: 'closed',
-                color_indicator: 'green',
-                ai_summary: `Проблема закрыта по сообщению WhatsApp: ${incomingText || ''}`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', toClose.id)
-              .select()
-              .single()
+        if (closeSelectError) {
+          console.error('CLOSE SELECT ERROR:', closeSelectError)
+        } else if (toClose?.id) {
+          const { data: closedTask, error: closeError } = await supabase
+            .from('tasks')
+            .update({
+              status: 'closed',
+              color_indicator: 'green',
+              ai_summary: `Проблема закрыта по сообщению WhatsApp: ${incomingText || ''}. KEY:${problemKey}`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', toClose.id)
+            .select()
+            .single()
 
-            if (!closeError) {
-              return NextResponse.json({ ok: true, closed: true, problemKey, inserted: closedTask })
-            }
-
-            console.error('CLOSE UPDATE ERROR:', closeError)
+          if (!closeError) {
+            return NextResponse.json({ ok: true, closed: true, problemKey, inserted: closedTask })
           }
+
+          console.error('CLOSE UPDATE ERROR:', closeError)
         }
       } catch (closeBlockError) {
         console.error('CLOSE BLOCK ERROR:', closeBlockError)
@@ -730,39 +735,46 @@ export async function POST(req: NextRequest) {
     // 1) Anti-duplicates for red/yellow: if similar active task exists (7 days) -> update it
     if (parsed.color === 'red' || parsed.color === 'yellow') {
       try {
-        const { data: candidates, error: candidatesError } = await findRecentActiveProblemTasks(supabase, {
-          projectName,
-          days: 7,
-        })
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
-        if (candidatesError) {
-          console.error('DEDUP SELECT ERROR:', candidatesError)
-        } else {
-          const match = (candidates || []).find((t: any) => taskMatchesProblem(t, stage, reason, material))
+        const { data: existing, error: existingError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('project_name', projectName)
+          .eq('status', 'active')
+          .in('color_indicator', ['red', 'yellow'])
+          .ilike('ai_summary', `%KEY:${problemKey}%`)
+          .gte('created_at', sevenDaysAgo)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
 
-          if (match?.id) {
-            const nextColor = mergeProblemColor(match.color_indicator, parsed.color)
-            const nextSummary = `${basePayload.ai_summary} | Обновлено из WhatsApp`
+        if (existingError) {
+          console.error('DEDUP SELECT ERROR:', existingError)
+        } else if (existing?.id) {
+          const nextColor =
+            existing.color_indicator === 'red' || parsed.color === 'red' ? 'red' : parsed.color
 
-            const { data: updatedTask, error: updateError } = await supabase
-              .from('tasks')
-              .update({
-                updated_at: new Date().toISOString(),
-                color_indicator: nextColor,
-                ai_summary: nextSummary,
-                sender_name: senderName,
-                sender_phone: senderPhone || null,
-              })
-              .eq('id', match.id)
-              .select()
-              .single()
+          const nextSummary = `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${problemKey} | Обновлено из WhatsApp`
 
-            if (!updateError) {
-              return NextResponse.json({ ok: true, updated: true, problemKey, inserted: updatedTask })
-            }
+          const { data: updatedTask, error: updateError } = await supabase
+            .from('tasks')
+            .update({
+              updated_at: new Date().toISOString(),
+              color_indicator: nextColor,
+              ai_summary: nextSummary,
+              sender_name: senderName,
+              sender_phone: senderPhone || null,
+            })
+            .eq('id', existing.id)
+            .select()
+            .single()
 
-            console.error('DEDUP UPDATE ERROR:', updateError)
+          if (!updateError) {
+            return NextResponse.json({ ok: true, updated: true, task: updatedTask })
           }
+
+          console.error('DEDUP UPDATE ERROR:', updateError)
         }
       } catch (dedupBlockError) {
         console.error('DEDUP BLOCK ERROR:', dedupBlockError)
