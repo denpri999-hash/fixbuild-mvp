@@ -14,11 +14,122 @@ function getSupabase() {
   return createClient(url, key)
 }
 
+const DONE_PHRASES = [
+  'сделали', 'сделано', 'готово', 'готова', 'готовы',
+  'закончили', 'завершили', 'выполнено', 'закрыли',
+  'устранили', 'смонтировали', 'установили',
+]
+
+const RED_PHRASES = [
+  'срыв', 'просрочка', 'не успели', 'не сделали',
+  'не закончили', 'остановка', 'простой',
+  'нет людей', 'нет рабочих', 'авария', 'сломался',
+  'не работает',
+]
+
+const YELLOW_PHRASES = [
+  'нет материала', 'материал не пришел', 'материал не пришёл',
+  'задержка', 'ждем', 'ждём', 'ожидаем',
+  'риск', 'частично', 'почти', 'не до конца',
+]
+
+const STAGE_RULES = [
+  { stage: 'фундамент', parts: ['фундамент', 'сваи', 'ростверк', 'котлован'] },
+  { stage: 'монолит', parts: ['монолит', 'армир', 'опалуб', 'перекрыт', 'заливк'] },
+  { stage: 'кровля', parts: ['кровл', 'крыша', 'стропил', 'профлист'] },
+  { stage: 'инженерка', parts: ['электрик', 'кабел', 'сантех', 'отоплен', 'вентиляц', 'труб'] },
+  { stage: 'отделка', parts: ['штукатур', 'стяжк', 'плитк', 'шпаклев', 'покраск', 'потол'] },
+  { stage: 'фасад', parts: ['фасад', 'утепл', 'облицовк'] },
+  { stage: 'благоустройство', parts: ['отмост', 'благоуст', 'брусчат', 'тротуар', 'бордюр'] },
+]
+
+const MATERIAL_RULES = [
+  { material: 'бетон', parts: ['бетон'] },
+  { material: 'арматура', parts: ['арматур'] },
+  { material: 'кирпич/блок', parts: ['кирпич', 'блок', 'газоблок'] },
+  { material: 'кабель', parts: ['кабел'] },
+  { material: 'трубы', parts: ['труб'] },
+  { material: 'плитка', parts: ['плитк'] },
+  { material: 'кровельный материал', parts: ['мембран', 'черепиц', 'профлист'] },
+]
+
+const REASON_RULES = [
+  { reason: 'люди', parts: ['нет людей', 'нет рабочих', 'не вышли', 'бригада'] },
+  { reason: 'материал', parts: ['нет материала', 'материал', 'не пришел', 'не пришёл'] },
+  { reason: 'техника', parts: ['кран', 'экскаватор', 'насос', 'техника', 'сломался'] },
+  { reason: 'погода', parts: ['дожд', 'снег', 'мороз', 'ветер'] },
+  { reason: 'сроки/организация', parts: ['срыв', 'просрочка', 'задержка', 'перенос', 'срок'] },
+  { reason: 'проект/согласование', parts: ['чертеж', 'чертёж', 'проект', 'согласование'] },
+]
+
+function normalizeForMatch(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[.,!?;:()[\]{}"«»'`/\\\-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function includesAny(text: string, phrases: string[]) {
+  return phrases.some((phrase) => text.includes(phrase))
+}
+
+function detectStage(text: string) {
+  const t = normalizeForMatch(text)
+  for (const rule of STAGE_RULES) {
+    if (rule.parts.some((part) => t.includes(part))) return rule.stage
+  }
+  return 'прочее'
+}
+
+function detectMaterial(text: string) {
+  const t = normalizeForMatch(text)
+  for (const rule of MATERIAL_RULES) {
+    if (rule.parts.some((part) => t.includes(part))) return rule.material
+  }
+  return 'не указан'
+}
+
+function detectReason(text: string) {
+  const t = normalizeForMatch(text)
+  for (const rule of REASON_RULES) {
+    if (rule.parts.some((part) => t.includes(part))) return rule.reason
+  }
+  return 'прочее'
+}
+
+function detectState(text: string) {
+  const t = normalizeForMatch(text)
+
+  if (includesAny(t, RED_PHRASES)) {
+    return { color: 'red' as const, summary: 'Обнаружена критическая проблема' }
+  }
+
+  if (includesAny(t, YELLOW_PHRASES)) {
+    return { color: 'yellow' as const, summary: 'Есть риск или требуется внимание' }
+  }
+
+  if (includesAny(t, DONE_PHRASES)) {
+    return { color: 'green' as const, summary: 'Работы выполнены или идут по плану' }
+  }
+
+  return { color: 'green' as const, summary: 'Сообщение принято' }
+}
+
 function normalizePhone(raw: string | null | undefined): string {
   if (!raw) return ''
+
   let value = String(raw).trim()
   if (value.includes('@')) value = value.split('@')[0]
-  return value.replace(/\D/g, '')
+
+  let digits = value.replace(/\D/g, '')
+
+  if (digits.length === 11 && digits.startsWith('8')) {
+    digits = `7${digits.slice(1)}`
+  }
+
+  return digits
 }
 
 function getIncomingText(body: any) {
@@ -30,35 +141,6 @@ function getIncomingText(body: any) {
     body?.messageData?.documentMessageData?.caption ||
     ''
   ).trim()
-}
-
-function detectColor(text: string): 'green' | 'yellow' | 'red' {
-  const t = text.toLowerCase()
-
-  if (
-    t.includes('срыв') ||
-    t.includes('просрочка') ||
-    t.includes('не успели') ||
-    t.includes('не сделали') ||
-    t.includes('сломался') ||
-    t.includes('авария')
-  ) {
-    return 'red'
-  }
-
-  if (
-    t.includes('нет материала') ||
-    t.includes('задержка') ||
-    t.includes('ждем') ||
-    t.includes('ждём') ||
-    t.includes('риск') ||
-    t.includes('почти') ||
-    t.includes('частично')
-  ) {
-    return 'yellow'
-  }
-
-  return 'green'
 }
 
 export async function POST(req: NextRequest) {
@@ -97,13 +179,16 @@ export async function POST(req: NextRequest) {
       body?.senderName ||
       'Неизвестный отправитель'
 
-    const color = detectColor(incomingText)
+    const parsed = detectState(incomingText)
+    const stage = detectStage(incomingText)
+    const material = detectMaterial(incomingText)
+    const reason = detectReason(incomingText)
 
     const payload = {
       title: incomingText || 'Новое сообщение WhatsApp',
       planned_date: new Date().toISOString().slice(0, 10),
-      color_indicator: color,
-      ai_summary: 'WhatsApp сообщение принято напрямую. Требуется назначить объект/компанию.',
+      color_indicator: parsed.color,
+      ai_summary: `${parsed.summary}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
       project_name: 'Входящие WhatsApp',
       sender_name: senderName,
       sender_phone: senderPhone || null,
@@ -116,13 +201,13 @@ export async function POST(req: NextRequest) {
       .select()
       .single()
 
-    console.log('DIRECT TASK INSERT RESULT:', { data, error, payload })
+    console.log('WHATSAPP TASK INSERT RESULT:', { data, error, payload })
 
     if (error) {
       return NextResponse.json(
         {
           ok: false,
-          stage: 'direct_tasks_insert',
+          stage: 'tasks_insert',
           error: error.message,
           details: error,
           payload,
@@ -134,11 +219,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       saved: true,
-      direct: true,
       inserted: data,
     })
   } catch (e: any) {
-    console.error('WHATSAPP ROUTE FATAL ERROR:', e)
+    console.error('WHATSAPP ROUTE ERROR:', e)
 
     return NextResponse.json(
       { ok: false, error: e?.message || 'route failed' },
