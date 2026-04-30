@@ -62,13 +62,6 @@ const REASON_RULES = [
   { reason: 'проект/согласование', parts: ['чертеж', 'чертёж', 'проект', 'согласование'] },
 ]
 
-const PROJECT_ALIASES: Record<string, string[]> = {
-  'ЖК Орда': ['жк орда', 'орда', 'zhk orda', 'orda'],
-  'Объект 1': ['объект 1', 'об 1', 'об1', 'obj1', 'object 1', 'первый объект'],
-  'Объект 2': ['объект 2', 'об 2', 'об2', 'obj2', 'object 2', 'второй объект'],
-  'Объект 3': ['объект 3', 'об 3', 'об3', 'object 3', 'третий объект'],
-}
-
 function normalizeForMatch(text: string) {
   return text
     .toLowerCase()
@@ -106,12 +99,20 @@ function detectReason(text: string) {
   return 'прочее'
 }
 
+const PROJECT_ALIASES: Record<string, string[]> = {
+  'ЖК Орда': ['жк орда', 'орда', 'zhk orda', 'orda'],
+  'Объект 1': ['объект 1', 'об 1', 'об1'],
+  'Объект 2': ['объект 2', 'об 2', 'об2'],
+}
+
 function detectProjectName(text: string) {
   const t = normalizeForMatch(text)
 
   for (const [projectName, aliases] of Object.entries(PROJECT_ALIASES)) {
     for (const alias of aliases) {
-      if (t.includes(normalizeForMatch(alias))) return projectName
+      if (t.includes(normalizeForMatch(alias))) {
+        return projectName
+      }
     }
   }
 
