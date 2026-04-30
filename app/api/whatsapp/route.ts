@@ -672,7 +672,14 @@ export async function POST(req: NextRequest) {
 
     // PILOT MODE: do not create company/project. Always write into tasks, with dedup/close safety.
     const projectName = detectedProjectName || 'Входящие WhatsApp'
-    const problemKey = `${projectName}|${stage}|${reason}|${material}`
+    const normalizedText = (incomingText || '')
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const problemKey = `${projectName}|${normalizedText}`
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
     const basePayload: any = {
       title: incomingText || 'Новое сообщение WhatsApp',
@@ -735,8 +742,6 @@ export async function POST(req: NextRequest) {
     // 1) Anti-duplicates for red/yellow: if similar active task exists (7 days) -> update it
     if (parsed.color === 'red' || parsed.color === 'yellow') {
       try {
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-
         const { data: existing, error: existingError } = await supabase
           .from('tasks')
           .select('*')
