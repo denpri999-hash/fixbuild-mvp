@@ -725,6 +725,46 @@ export async function POST(req: NextRequest) {
     console.log('PARSED TEXT:', incomingText)
     console.log('TYPE MESSAGE:', type)
 
+    // TEMP: direct mode — save every WhatsApp message into tasks and stop
+    const directSenderName = senderNameFromWebhook
+
+    const { data: directTask, error: directTaskError } = await supabase
+      .from('tasks')
+      .insert([
+        {
+          title: incomingText || 'Новое сообщение WhatsApp',
+          planned_date: new Date().toISOString().slice(0, 10),
+          color_indicator: 'yellow',
+          ai_summary: 'WhatsApp сообщение принято напрямую. Требуется назначить объект/компанию.',
+          project_name: 'Входящие WhatsApp',
+          sender_name: directSenderName || senderNameFromWebhook || 'Неизвестный отправитель',
+          sender_phone: senderPhone || null,
+          status: 'active',
+        },
+      ])
+      .select()
+      .single()
+
+    console.log('DIRECT WHATSAPP TASK INSERT:', { directTask, directTaskError })
+
+    if (directTaskError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: directTaskError?.message || 'direct task insert failed',
+          details: directTaskError,
+        },
+        { status: 200 }
+      )
+    }
+
+    return NextResponse.json({
+      ok: true,
+      saved: true,
+      direct: true,
+      inserted: directTask,
+    })
+
     const whatsappInstance = await findCompanyByGreenInstance(supabase, body)
     const employee = await findEmployeeByPhone(supabase, senderPhone)
 
@@ -787,7 +827,11 @@ export async function POST(req: NextRequest) {
       if (unassignedTaskError) {
         console.error('UNASSIGNED TASK INSERT ERROR:', unassignedTaskError)
         return NextResponse.json(
-          { ok: false, error: unassignedTaskError.message, details: unassignedTaskError },
+          {
+            ok: false,
+            error: unassignedTaskError?.message || 'unassigned task insert failed',
+            details: unassignedTaskError,
+          },
           { status: 200 }
         )
       }
@@ -885,7 +929,10 @@ export async function POST(req: NextRequest) {
 
     if (taskError) {
       console.error('TASK INSERT ERROR:', taskError)
-      return NextResponse.json({ ok: false, error: taskError.message }, { status: 200 })
+      return NextResponse.json(
+        { ok: false, error: taskError?.message || 'task insert failed' },
+        { status: 200 }
+      )
     }
 
     const taskId = insertedTask?.id || null
@@ -964,7 +1011,7 @@ export async function POST(req: NextRequest) {
           problemTitle: relatedProblemTitle,
           senderName,
           comment: title,
-          photoUrl,
+          photoUrl: photoUrl!,
         })
       }
 
@@ -1028,7 +1075,7 @@ export async function POST(req: NextRequest) {
           problemTitle: relatedProblemTitle,
           senderName,
           comment: title,
-          photoUrl,
+          photoUrl: photoUrl!,
         })
       }
 
@@ -1082,7 +1129,7 @@ export async function POST(req: NextRequest) {
           problemTitle: relatedProblemTitle,
           senderName,
           comment: title,
-          photoUrl,
+          photoUrl: photoUrl!,
         })
       }
 
@@ -1149,7 +1196,7 @@ export async function POST(req: NextRequest) {
         problemTitle: relatedProblemTitle,
         senderName,
         comment: title,
-        photoUrl,
+        photoUrl: photoUrl!,
       })
     }
 
