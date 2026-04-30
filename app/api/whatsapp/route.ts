@@ -555,6 +555,67 @@ async function safeInsertTask(supabase: any, payload: any) {
   return { data, error, payload: normalizedPayload }
 }
 
+async function findRecentActiveProblemTasks(
+  supabase: any,
+  params: { projectName: string; days: number }
+) {
+  const since = new Date(Date.now() - params.days * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, created_at, updated_at, status, project_name, color_indicator, ai_summary, stage, deviation_reason, material')
+    .eq('project_name', params.projectName)
+    .eq('status', 'active')
+    .in('color_indicator', ['red', 'yellow'])
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(50)
+
+  return { data: data || [], error }
+}
+
+function taskMatchesProblem(task: any, stage: string, reason: string, material: string) {
+  const tStage = String(task?.stage || '').trim()
+  const tReason = String(task?.deviation_reason || '').trim()
+  const tMaterial = String(task?.material || '').trim()
+
+  if (tStage || tReason || tMaterial) {
+    return tStage === stage && tReason === reason && tMaterial === material
+  }
+
+  const summary = String(task?.ai_summary || '')
+  return (
+    summary.includes(`Этап: ${stage}`) &&
+    summary.includes(`Причина: ${reason}`) &&
+    summary.includes(`Материал: ${material}`)
+  )
+}
+
+function taskMatchesClose(task: any, stage: string) {
+  const tStage = String(task?.stage || '').trim()
+  if (tStage) return tStage === stage
+  return String(task?.ai_summary || '').includes(`Этап: ${stage}`)
+}
+
+function mergeProblemColor(existing: string | null | undefined, incoming: string) {
+  if (existing === 'red') return 'red'
+  if (incoming === 'red') return 'red'
+  if (existing === 'yellow' || incoming === 'yellow') return 'yellow'
+  return incoming || existing || 'yellow'
+}
+
+function isClosingMessage(incomingText: string, parsedColor: string) {
+  if (parsedColor === 'green') return true
+  const t = normalizeForMatch(incomingText || '')
+  return (
+    t.includes('сделали') ||
+    t.includes('готово') ||
+    t.includes('закрыли') ||
+    t.includes('устранили') ||
+    t.includes('завершили')
+  )
+}
+
 export async function POST(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
 
@@ -609,29 +670,119 @@ export async function POST(req: NextRequest) {
     const employeeId = employee?.id || null
     const senderName = employee?.name || senderNameFromWebhook
 
-    if (!companyId) {
-      const { data, error, payload } = await safeInsertTask(supabase, {
-        title: incomingText || 'Новое сообщение WhatsApp',
-        color_indicator: parsed.color,
-        ai_summary: `${parsed.summary}. Объект: ${detectedProjectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
-        project_name: detectedProjectName || 'Входящие WhatsApp',
-        sender_name: senderName,
-        sender_phone: senderPhone || null,
-        status: 'active',
-      })
+    // PILOT MODE: do not create company/project. Always write into tasks, with dedup/close safety.
+    const projectName = detectedProjectName || 'Входящие WhatsApp'
+    const problemKey = `${projectName}|${stage}|${reason}|${material}`
 
-      console.log('WHATSAPP UNASSIGNED TASK INSERT RESULT:', { data, error, payload })
-
-      if (error) {
-        // Even the minimal insert failed — return ok:false for observability but keep 200 for webhook semantics
-        return NextResponse.json(
-          { ok: false, stage: 'tasks_insert_unassigned', error: error.message, details: error, payload },
-          { status: 200 }
-        )
-      }
-
-      return NextResponse.json({ ok: true, saved: true, unassigned: true, inserted: data })
+    const basePayload: any = {
+      title: incomingText || 'Новое сообщение WhatsApp',
+      planned_date: new Date().toISOString().slice(0, 10),
+      color_indicator: parsed.color,
+      ai_summary: `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
+      project_name: projectName,
+      stage,
+      deviation_reason: reason,
+      material,
+      sender_name: senderName,
+      sender_phone: senderPhone || null,
+      status: 'active',
     }
+
+    // 2) Close problem: if green or message indicates completion, close last active red/yellow task by project+stage (14 days)
+    if (isClosingMessage(incomingText, parsed.color)) {
+      try {
+        const { data: candidates, error: candidatesError } = await findRecentActiveProblemTasks(supabase, {
+          projectName,
+          days: 14,
+        })
+
+        if (candidatesError) {
+          console.error('CLOSE SELECT ERROR:', candidatesError)
+        } else {
+          const toClose = (candidates || []).find((t: any) => taskMatchesClose(t, stage))
+
+          if (toClose?.id) {
+            const { data: closedTask, error: closeError } = await supabase
+              .from('tasks')
+              .update({
+                status: 'closed',
+                color_indicator: 'green',
+                ai_summary: `Проблема закрыта по сообщению WhatsApp: ${incomingText || ''}`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', toClose.id)
+              .select()
+              .single()
+
+            if (!closeError) {
+              return NextResponse.json({ ok: true, closed: true, problemKey, inserted: closedTask })
+            }
+
+            console.error('CLOSE UPDATE ERROR:', closeError)
+          }
+        }
+      } catch (closeBlockError) {
+        console.error('CLOSE BLOCK ERROR:', closeBlockError)
+        // fall through to normal insert
+      }
+    }
+
+    // 1) Anti-duplicates for red/yellow: if similar active task exists (7 days) -> update it
+    if (parsed.color === 'red' || parsed.color === 'yellow') {
+      try {
+        const { data: candidates, error: candidatesError } = await findRecentActiveProblemTasks(supabase, {
+          projectName,
+          days: 7,
+        })
+
+        if (candidatesError) {
+          console.error('DEDUP SELECT ERROR:', candidatesError)
+        } else {
+          const match = (candidates || []).find((t: any) => taskMatchesProblem(t, stage, reason, material))
+
+          if (match?.id) {
+            const nextColor = mergeProblemColor(match.color_indicator, parsed.color)
+            const nextSummary = `${basePayload.ai_summary} | Обновлено из WhatsApp`
+
+            const { data: updatedTask, error: updateError } = await supabase
+              .from('tasks')
+              .update({
+                updated_at: new Date().toISOString(),
+                color_indicator: nextColor,
+                ai_summary: nextSummary,
+                sender_name: senderName,
+                sender_phone: senderPhone || null,
+              })
+              .eq('id', match.id)
+              .select()
+              .single()
+
+            if (!updateError) {
+              return NextResponse.json({ ok: true, updated: true, problemKey, inserted: updatedTask })
+            }
+
+            console.error('DEDUP UPDATE ERROR:', updateError)
+          }
+        }
+      } catch (dedupBlockError) {
+        console.error('DEDUP BLOCK ERROR:', dedupBlockError)
+        // fall through to normal insert
+      }
+    }
+
+    // Default: insert a new task (fallback-safe)
+    const { data, error, payload } = await safeInsertTask(supabase, basePayload)
+
+    console.log('WHATSAPP TASK INSERT RESULT (pilot):', { data, error, payload, problemKey })
+
+    if (error) {
+      return NextResponse.json(
+        { ok: false, stage: 'tasks_insert_pilot', error: error.message, details: error, payload, problemKey },
+        { status: 200 }
+      )
+    }
+
+    return NextResponse.json({ ok: true, saved: true, inserted: data, problemKey })
 
     // Expanded logic block: must not drop webhook on error.
     try {
@@ -655,6 +806,8 @@ export async function POST(req: NextRequest) {
         color_indicator: parsed.color,
         ai_summary: parsed.summary,
         project_name: projectName,
+        stage,
+        deviation_reason: reason,
         company_id: companyId,
         employee_id: employeeId,
         sender_name: senderName,
@@ -680,6 +833,8 @@ export async function POST(req: NextRequest) {
           color_indicator: parsed.color,
           ai_summary: `${parsed.summary}. Объект: ${detectedProjectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}.`,
           project_name: detectedProjectName || 'Входящие WhatsApp',
+          stage,
+          deviation_reason: reason,
           sender_name: senderName,
           sender_phone: senderPhone || null,
           status: 'active',
@@ -795,7 +950,7 @@ export async function POST(req: NextRequest) {
                 problemTitle: activeProblem.title,
                 senderName,
                 comment: title || '',
-                photoUrl,
+                photoUrl: photoUrl!,
               })
             }
           } else {
@@ -848,7 +1003,7 @@ export async function POST(req: NextRequest) {
                   problemTitle,
                   senderName,
                   comment: title || '',
-                  photoUrl,
+                  photoUrl: photoUrl!,
                 })
               }
             } else if (newProblemError) {
@@ -874,6 +1029,8 @@ export async function POST(req: NextRequest) {
         color_indicator: parsed?.color || 'yellow',
         ai_summary: `Fallback: сообщение сохранено. Ошибка расширенной логики: ${message}`,
         project_name: detectedProjectName || 'Входящие WhatsApp',
+        stage,
+        deviation_reason: reason,
         sender_name: senderName,
         sender_phone: senderPhone || null,
         status: 'active',
