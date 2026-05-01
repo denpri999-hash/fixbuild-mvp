@@ -248,7 +248,11 @@ export default function Page() {
   }
 
   async function fetchMedia() {
-    if (!companyId) return
+    console.log('[PHOTO] companyId:', companyId)
+    if (!companyId) {
+      console.log('[PHOTO] no companyId, skip')
+      return
+    }
 
     const { data: photoArchiveData, error: photoError } = await supabase
       .from('problem_media')
@@ -257,6 +261,9 @@ export default function Page() {
       .not('photo_url', 'is', null)
       .order('created_at', { ascending: false })
       .limit(20)
+
+    console.log('[PHOTO] data:', photoArchiveData)
+    console.log('[PHOTO] error:', photoError)
 
     if (photoError) throw photoError
     setMedia(((photoArchiveData || []) as ProblemMedia[]))
@@ -582,7 +589,10 @@ export default function Page() {
 
   const filteredHistory = useMemo(() => {
     let scoped = selectedProject === 'all' ? history : history.filter((h) => h.project_name === selectedProject)
-    scoped = scoped.filter((h) => h.project_name ? visibleProjectNames.has(h.project_name) : false)
+    scoped = scoped.filter((h) => {
+      if (selectedProject === 'all') return true
+      return h.project_name === selectedProject
+    })
     if (selectedProblemForHistory !== 'all') {
       scoped = scoped.filter((h) => h.problem_id === selectedProblemForHistory)
     }

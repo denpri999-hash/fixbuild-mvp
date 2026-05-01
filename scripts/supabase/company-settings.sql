@@ -33,3 +33,14 @@ using (
   )
 );
 
+drop policy if exists settings_insert_own on public.company_settings;
+create policy settings_insert_own
+on public.company_settings for insert
+with check (
+  company_id = (
+    select company_id from public.company_users
+    where user_id = auth.uid()
+    limit 1
+  )
+);
+
