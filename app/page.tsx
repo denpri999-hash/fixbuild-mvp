@@ -72,6 +72,7 @@ type ProblemMedia = {
 }
 
 type ProblemFilter = 'all' | 'red' | 'yellow'
+type EventsFilter = 'all' | 'problems' | 'photo' | 'statuses'
 
 const role = 'admin'
 
@@ -151,6 +152,10 @@ export default function Page() {
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [urlReady, setUrlReady] = useState(false)
+  const [highlightedIssueId, setHighlightedIssueId] = useState<string | null>(null)
+  const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
+  const [eventsShowAll, setEventsShowAll] = useState(false)
+  const [uiToast, setUiToast] = useState<string | null>(null)
 
   async function fetchTasks() {
     let query = supabase
@@ -280,7 +285,7 @@ export default function Page() {
       .filter((t) => isInsideDateRange(t.updated_at, dateFrom, dateTo))
   }, [tasks, selectedProject, dateFrom, dateTo])
 
-  const recentTasks = useMemo(() => projectFilteredTasks.slice(0, 12), [projectFilteredTasks])
+  const recentTasks = useMemo(() => projectFilteredTasks.slice(0, 30), [projectFilteredTasks])
 
   const stageSummary = useMemo(() => {
     const map: Record<string, number> = {}
@@ -343,6 +348,89 @@ export default function Page() {
       .filter((m) => isInsideDateRange(m.created_at, dateFrom, dateTo))
       .slice(0, 20)
   }, [media, selectedProject, dateFrom, dateTo, companyId, visibleProjectNames])
+
+  const unifiedEvents = useMemo(() => {
+    const items: Array<{
+      id: string
+      type: EventsFilter
+      title: string
+      projectName: string
+      at: string
+      meta?: string
+      issueId?: string | null
+      photoUrl?: string | null
+    }> = []
+
+    // Problems: история проблем
+    filteredHistory.forEach((h) => {
+      items.push({
+        id: `h_${h.id}`,
+        type: 'problems',
+        title: h.event,
+        projectName: h.project_name || 'Без объекта',
+        at: h.created_at,
+        meta: h.problem_title || '',
+        issueId: h.problem_id,
+      })
+    })
+
+    // Photo: медиа
+    filteredMedia.forEach((m) => {
+      items.push({
+        id: `m_${m.id}`,
+        type: 'photo',
+        title: m.problem_title || 'Фото',
+        projectName: m.project_name || 'Без объекта',
+        at: m.created_at,
+        meta: m.comment || '',
+        issueId: m.problem_id,
+        photoUrl: m.photo_url,
+      })
+    })
+
+    // Statuses: задачи WhatsApp
+    recentTasks.forEach((t) => {
+      items.push({
+        id: `t_${t.id}`,
+        type: 'statuses',
+        title: t.title,
+        projectName: t.project_name || 'Без объекта',
+        at: t.updated_at || t.planned_date || new Date().toISOString(),
+        meta: taskStatusText(t.color_indicator),
+        photoUrl: t.photo_url,
+      })
+    })
+
+    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+  }, [filteredHistory, filteredMedia, recentTasks])
+
+  const visibleEvents = useMemo(() => {
+    const filtered = unifiedEvents.filter((e) => eventsFilter === 'all' || e.type === eventsFilter)
+    return eventsShowAll ? filtered : filtered.slice(0, 10)
+  }, [unifiedEvents, eventsFilter, eventsShowAll])
+
+  function scrollToActiveIssues() {
+    const el = document.getElementById('active-issues')
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function scrollToIssue(problemId: string | null | undefined) {
+    if (!problemId) return
+    scrollToActiveIssues()
+    window.setTimeout(() => {
+      const row = document.getElementById(`issue-${problemId}`)
+      if (!row) return
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedIssueId(problemId)
+      window.setTimeout(() => setHighlightedIssueId((current) => (current === problemId ? null : current)), 2600)
+    }, 120)
+  }
+
+  function showToast(text: string) {
+    setUiToast(text)
+    window.setTimeout(() => setUiToast(null), 2200)
+  }
 
   const reportText = useMemo(() => {
     const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
@@ -520,61 +608,37 @@ export default function Page() {
           </div>
         )}
 
+        {/* KPI */}
         <section style={kpiGrid}>
-          <KpiCard label="Проблемы" value={redCount} color="#ef4444" />
-          <KpiCard label="Риски" value={yellowCount} color="#f59e0b" />
-          <KpiCard label="В норме" value={greenCount} color="#22c55e" />
-          <KpiCard label="Требует внимания" value={attentionCount} color="#f97316" />
+          <KpiCard label="Проблемы" value={redCount} color="#ef4444" onClick={scrollToActiveIssues} />
+          <KpiCard label="Риски" value={yellowCount} color="#f59e0b" onClick={scrollToActiveIssues} />
+          <KpiCard label="В норме" value={greenCount} color="#22c55e" onClick={scrollToActiveIssues} />
+          <KpiCard label="Требует внимания" value={attentionCount} color="#f97316" onClick={scrollToActiveIssues} />
         </section>
 
+        {/* Alert */}
         <section style={panel}>
-          <div style={panelHeader}>
-            <div>
-              <div style={sectionTitle}>Отчет директору</div>
-              <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
+          <div style={sectionTitle}>Alert</div>
+          <div style={sectionSubTitle}>Главные блокеры. Клик по строке — скролл к проблеме в Active Issues</div>
+          {blockers.length === 0 ? <div style={emptyBox}>Алертов нет</div> : (
+            <div style={listWrap}>
+              {blockers.map((item) => (
+                <button
+                  key={item.id}
+                  style={alertRowButton}
+                  onClick={() => scrollToIssue(item.id)}
+                >
+                  <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.title}</div>
+                  <div style={metaLine}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {item.days_count || 1} дн.</div>
+                </button>
+              ))}
             </div>
-            <div style={actionRow}>
-              <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать отчет'}</button>
-              <button style={primaryButton} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
-            </div>
-          </div>
-          <pre style={reportBox}>{reportText}</pre>
+          )}
         </section>
 
-        <section style={grid4}>
-          <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
-          <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
-          <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
-          <div style={panel}>
-            <div style={sectionTitle}>Главные блокеры</div>
-            <div style={sectionSubTitle}>Критичные активные проблемы по срокам и повторяемости</div>
-            {blockers.length === 0 ? <div style={emptyBox}>Блокеров нет</div> : blockers.map((item) => (
-              <div key={item.id} style={blockerCard}>
-                <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.title}</div>
-                <div style={metaLine}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'}</div>
-                <div style={metaLine}>Ответственный: {item.responsible_person || 'Не указан'} · Длится: {item.days_count || 1} дн.</div>
-              </div>
-            ))}
-          </div>
-        </section>
-
+        {/* Issues + Events */}
         <section style={mainGrid}>
-          <div style={sidePanel}>
-            <div style={sectionTitle}>Последние события</div>
-            <div style={sectionSubTitle}>Свежие записи из задач и WhatsApp</div>
-            {recentTasks.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : recentTasks.map((task) => (
-              <div key={task.id} style={eventCard}>
-                <div style={eventTopRow}>
-                  <div style={listTitleSmall}>{task.title}</div>
-                  <span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span>
-                </div>
-                <div style={metaLine}>{task.project_name || 'Без объекта'} · {task.sender_name || 'Не указан'} · {formatDateTime(task.updated_at)}</div>
-                <div style={taskSummary}>{task.ai_summary || 'Без комментария'}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={panel}>
+          <div style={panel} id="active-issues">
             <div style={panelHeader}>
               <div>
                 <div style={sectionTitle}>Активные проблемы</div>
@@ -600,14 +664,14 @@ export default function Page() {
                     <th style={cellHeader}>Длится</th>
                     <th style={cellHeader}>Фото</th>
                     <th style={cellHeader}>История</th>
-                    <th style={cellHeader}>Действие</th>
+                    <th style={cellHeader}>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredProblems.length === 0 ? (
                     <tr><td style={emptyCell} colSpan={10}>{emptyText(problemFilter)}</td></tr>
                   ) : filteredProblems.map((problem) => (
-                    <tr key={problem.id}>
+                    <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
                       <td style={cellStrong}>
                         <div>{problem.title}</div>
                         <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
@@ -621,15 +685,110 @@ export default function Page() {
                       <td style={cell}>{problem.days_count || 1} дн.</td>
                       <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
                       <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
-                      <td style={cell}>{role === 'admin' ? <button style={closeButton} onClick={() => closeProblem(problem.id)} disabled={closingId === problem.id}>{closingId === problem.id ? 'Закрываем...' : 'Закрыть'}</button> : null}</td>
+                      <td style={cell}>
+                        <div style={actionsCol}>
+                          <button style={actionChip} onClick={() => showToast('UI: Взято на контроль')}>Взять на контроль</button>
+                          <button style={actionChip} onClick={() => showToast('UI: Запрос отправлен')}>Запросить обновление</button>
+                          <button
+                            style={actionChipDanger}
+                            onClick={() => showToast('UI: Закрытие (без backend)')}
+                            disabled={closingId === problem.id}
+                          >
+                            Закрыть
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
+
+          <div style={sidePanel}>
+            <div style={panelHeader}>
+              <div>
+                <div style={sectionTitle}>Последние события</div>
+                <div style={sectionSubTitle}>10 последних событий. Можно отфильтровать и показать все</div>
+              </div>
+              <div style={actionRow}>
+                <button style={eventsFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('all')}>Все</button>
+                <button style={eventsFilter === 'problems' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('problems')}>Проблемы</button>
+                <button style={eventsFilter === 'photo' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('photo')}>Фото</button>
+                <button style={eventsFilter === 'statuses' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('statuses')}>Статусы</button>
+              </div>
+            </div>
+
+            {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
+              <button
+                key={event.id}
+                style={eventButton}
+                onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
+              >
+                <div style={eventTopRow}>
+                  <div style={listTitleSmall}>{event.title}</div>
+                  <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
+                </div>
+                <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
+                {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
+                {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
+              </button>
+            ))}
+
+            <div style={{ marginTop: 12 }}>
+              <button style={secondaryButton} onClick={() => setEventsShowAll((v) => !v)}>
+                {eventsShowAll ? 'Свернуть' : 'Показать все'}
+              </button>
+            </div>
+          </div>
         </section>
 
+        {/* Photos */}
+        <section style={panel}>
+          <div style={sectionTitle}>Фотоархив</div>
+          <div style={sectionSubTitle}>Фото, дата и комментарий</div>
+          {filteredMedia.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
+            <div style={photoGrid}>{filteredMedia.map((item) => (
+              <div key={item.id} style={photoCard}>
+                <a href={item.photo_url} target="_blank" rel="noreferrer" style={photoLink}><img src={item.photo_url} alt="Фото объекта" style={photoImage} /></a>
+                <div style={photoMeta}>
+                  <div style={listTitleSmall}>{item.problem_title || item.project_name || 'Фото'}</div>
+                  <div style={metaLine}>{item.project_name || 'Без проекта'} · {item.sender_name || 'Не указан'}</div>
+                  <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                  {item.comment ? <div style={taskSummary}>{item.comment}</div> : null}
+                </div>
+              </div>
+            ))}</div>
+          )}
+        </section>
+
+        {/* Analytics */}
+        <section style={panel}>
+          <div style={panelHeader}>
+            <div>
+              <div style={sectionTitle}>Отчет директору</div>
+              <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
+            </div>
+            <div style={actionRow}>
+              <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать отчет'}</button>
+              <button style={primaryButton} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
+            </div>
+          </div>
+          <pre style={reportBox}>{reportText}</pre>
+        </section>
+
+        <section style={grid4}>
+          <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
+          <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
+          <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
+          <div style={panel}>
+            <div style={sectionTitle}>Подсказка</div>
+            <div style={sectionSubTitle}>Клик по KPI/Alert/Events — скролл к Active Issues</div>
+            <div style={emptyBox}>Действия в Issues сейчас UI-only (как в пилоте).</div>
+          </div>
+        </section>
+
+        {/* Archive */}
         <section style={panel}>
           <div style={sectionTitle}>Закрытые проблемы</div>
           <div style={sectionSubTitle}>История вручную и автоматически закрытых проблем</div>
@@ -668,52 +827,32 @@ export default function Page() {
           </div>
         </section>
 
-        <section style={twoCols}>
-          <div style={panel}>
-            <div style={panelHeader}>
-              <div>
-                <div style={sectionTitle}>История проблем</div>
-                <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
-              </div>
-              <div style={actionRow}>
-                <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
-                  <option value="all">Все проблемы</option>
-                  {problems.map((problem) => (
-                    <option key={problem.id} value={problem.id}>{problem.project_name || 'Без проекта'} — {problem.title}</option>
-                  ))}
-                </select>
-                {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
-              </div>
+        <section style={panel}>
+          <div style={panelHeader}>
+            <div>
+              <div style={sectionTitle}>История проблем</div>
+              <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
             </div>
-            {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
-              <div style={listWrap}>{filteredHistory.map((item) => (
-                <div key={item.id} style={listItem}>
-                  <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.problem_title || 'Проблема'}</div>
-                  <div style={metaLine}>{formatDateTime(item.created_at)}</div>
-                  <div style={taskSummary}>{item.event}</div>
-                  {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
-                </div>
-              ))}</div>
-            )}
+            <div style={actionRow}>
+              <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
+                <option value="all">Все проблемы</option>
+                {problems.map((problem) => (
+                  <option key={problem.id} value={problem.id}>{problem.project_name || 'Без проекта'} — {problem.title}</option>
+                ))}
+              </select>
+              {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
+            </div>
           </div>
-
-          <div style={panel}>
-            <div style={sectionTitle}>Фотоархив</div>
-            <div style={sectionSubTitle}>Фото, дата и комментарий для руководителя</div>
-            {filteredMedia.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
-              <div style={photoGrid}>{filteredMedia.map((item) => (
-                <div key={item.id} style={photoCard}>
-                  <a href={item.photo_url} target="_blank" rel="noreferrer" style={photoLink}><img src={item.photo_url} alt="Фото объекта" style={photoImage} /></a>
-                  <div style={photoMeta}>
-                    <div style={listTitleSmall}>{item.problem_title || item.project_name || 'Фото'}</div>
-                    <div style={metaLine}>{item.project_name || 'Без проекта'} · {item.sender_name || 'Не указан'}</div>
-                    <div style={metaLine}>{formatDateTime(item.created_at)}</div>
-                    {item.comment ? <div style={taskSummary}>{item.comment}</div> : null}
-                  </div>
-                </div>
-              ))}</div>
-            )}
-          </div>
+          {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
+            <div style={listWrap}>{filteredHistory.map((item) => (
+              <div key={item.id} style={listItem}>
+                <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.problem_title || 'Проблема'}</div>
+                <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                <div style={taskSummary}>{item.event}</div>
+                {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
+              </div>
+            ))}</div>
+          )}
         </section>
 
         <section style={panel}>
@@ -750,6 +889,12 @@ export default function Page() {
         </section>
       </div>
 
+      {uiToast ? (
+        <div style={toastWrap}>
+          <div style={toastCard}>{uiToast}</div>
+        </div>
+      ) : null}
+
       {historyModalProblem ? (
         <div style={modalOverlay} onClick={() => setHistoryModalProblem(null)}>
           <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -776,12 +921,15 @@ export default function Page() {
   )
 }
 
-function KpiCard({ label, value, color }: { label: string; value: number; color: string }) {
+function KpiCard({ label, value, color, onClick }: { label: string; value: number; color: string; onClick?: () => void }) {
   return (
-    <div style={{ ...kpiCard, borderColor: `${color}55` }}>
+    <button
+      onClick={onClick}
+      style={{ ...kpiCardButton, borderColor: `${color}55` }}
+    >
       <div style={kpiLabel}><span style={{ ...dot, background: color }} />{label}</div>
       <div style={kpiValue}>{value}</div>
-    </div>
+    </button>
   )
 }
 
@@ -822,6 +970,7 @@ const projectSelect: CSSProperties = { border: '1px solid #cbd5e1', borderRadius
 const dateInput: CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 10, padding: '9px 12px', background: '#fff' }
 const kpiGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 18 }
 const kpiCard: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 18, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
+const kpiCardButton: CSSProperties = { ...kpiCard, cursor: 'pointer', textAlign: 'left' as const }
 const kpiLabel: CSSProperties = { fontSize: 13, color: '#475569', display: 'flex', alignItems: 'center', gap: 7 }
 const kpiValue: CSSProperties = { fontSize: 36, fontWeight: 800, marginTop: 14 }
 const dot: CSSProperties = { width: 10, height: 10, borderRadius: 99, display: 'inline-block' }
@@ -860,6 +1009,7 @@ const listTitleSmall: CSSProperties = { fontWeight: 800, marginBottom: 5, fontSi
 const metaLine: CSSProperties = { color: '#64748b', fontSize: 12, lineHeight: 1.45 }
 const taskSummary: CSSProperties = { color: '#334155', fontSize: 13, marginTop: 6 }
 const eventCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, padding: 12, marginTop: 10, background: '#fff' }
+const eventButton: CSSProperties = { ...eventCard, width: '100%', textAlign: 'left' as const, cursor: 'pointer', display: 'block' }
 const eventTopRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }
 const blockerCard: CSSProperties = { border: '1px solid #fee2e2', borderRadius: 12, padding: 12, marginTop: 10, background: '#fff7f7' }
 const summaryRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginTop: 10 }
@@ -872,6 +1022,27 @@ const loadingBox: CSSProperties = { background: '#fff', padding: 24, borderRadiu
 const errorBox: CSSProperties = { background: '#fee2e2', color: '#991b1b', padding: 14, borderRadius: 12, marginBottom: 14, border: '1px solid #fecaca' }
 const clientModeBox: CSSProperties = { background: '#dcfce7', color: '#166534', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #bbf7d0', fontWeight: 700 }
 const warningBox: CSSProperties = { background: '#fef3c7', color: '#92400e', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #fde68a', fontWeight: 700 }
+const highlightedRow: CSSProperties = { background: '#fef9c3' }
+const actionsCol: CSSProperties = { display: 'grid', gap: 6, minWidth: 170 }
+const actionChip: CSSProperties = { background: '#fff', border: '1px solid #cbd5e1', borderRadius: 10, padding: '7px 10px', fontWeight: 800, cursor: 'pointer', fontSize: 12 }
+const actionChipDanger: CSSProperties = { ...actionChip, border: '1px solid #fecaca', background: '#fff7f7', color: '#991b1b' }
+const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
+const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
+const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
+
+function eventLabel(type: EventsFilter) {
+  if (type === 'problems') return 'Проблемы'
+  if (type === 'photo') return 'Фото'
+  if (type === 'statuses') return 'Статусы'
+  return 'Все'
+}
+
+function eventTypePill(type: EventsFilter): CSSProperties {
+  if (type === 'problems') return { ...smallPill, background: '#e0e7ff', color: '#3730a3' }
+  if (type === 'photo') return { ...smallPill, background: '#dcfce7', color: '#166534' }
+  if (type === 'statuses') return { ...smallPill, background: '#fef3c7', color: '#92400e' }
+  return { ...smallPill, background: '#e2e8f0', color: '#334155' }
+}
 const modalOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
 const modalCard: CSSProperties = { width: 'min(760px, 100%)', maxHeight: '82vh', overflow: 'auto', background: '#fff', borderRadius: 18, padding: 18, boxShadow: '0 18px 60px rgba(15,23,42,.25)' }
 const modalHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 12 }

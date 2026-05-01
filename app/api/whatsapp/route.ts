@@ -335,26 +335,24 @@ function detectState(text: string): ParsedState {
   return { kind: 'normal', color: 'green', summary: 'Всё по плану' }
 }
 
-function buildProblemKey(projectName: string, stage: string, reason: string, material: string) {
-  const stable = [projectName, stage, reason, material].map((v) => slugify(v || 'base')).join('|')
-  return stable || `${slugify(projectName)}|прочее|прочее|base`
+function buildProblemKey(projectName: string, stage: string, _reason: string, _material: string) {
+  // Детерминированно: 1 проблема = 1 stage (reason/material не создают новую проблему).
+  return `${slugify(projectName)}|${slugify(stage || 'прочее')}`
 }
 
 function buildTaskKey(projectName: string, incomingText: string, stage: string, reason: string, material: string) {
   const normalizedText = normalizeForMatch(incomingText)
 
-  const isGeneric =
-    (stage || 'прочее') === 'прочее' &&
-    (reason || 'прочее') === 'прочее' &&
-    (material || 'не указан') === 'не указан'
-
-  if (!isGeneric) {
-    return `${slugify(projectName)}|${slugify(stage)}|${slugify(reason)}|${slugify(material)}`
+  // Детерминированно: 1 активная red/yellow задача на stage (в пределах проекта).
+  // reason/material обновляют существующую, но не создают новую.
+  if ((stage || 'прочее') !== 'прочее') {
+    return `${slugify(projectName)}|${slugify(stage)}`
   }
 
+  // Если stage не определился — только тогда fallback на текст.
   if (normalizedText) return `${slugify(projectName)}|text|${slugify(normalizedText)}`
 
-  return `${slugify(projectName)}|прочее|прочее|не_указан`
+  return `${slugify(projectName)}|прочее`
 }
 
 function buildProblemTitle(stage: string, reason: string, material: string, fallbackText: string) {
@@ -784,6 +782,7 @@ async function updateExistingTaskIfDuplicate(
     reason: string
     senderName: string
     senderPhone: string
+    photoUrl?: string | null
   }
 ) {
   if (params.parsed.color !== 'red' && params.parsed.color !== 'yellow') return null
@@ -829,6 +828,7 @@ async function updateExistingTaskIfDuplicate(
       ai_summary: nextSummary,
       sender_name: params.senderName,
       sender_phone: params.senderPhone || null,
+      photo_url: params.photoUrl || existingTask.photo_url || null,
     })
     .eq('id', existingTask.id)
     .select()
@@ -1408,6 +1408,7 @@ export async function POST(req: NextRequest) {
         reason,
         senderName,
         senderPhone,
+        photoUrl,
       })
 
       console.log('DEDUP RESULT:', { taskKey, updated: Boolean(existingTask) })
@@ -1433,6 +1434,32 @@ export async function POST(req: NextRequest) {
       }
     } catch (dedupeError) {
       console.error('DEDUPE/CLOSE ERROR, FALLBACK TO INSERT:', dedupeError)
+    }
+
+    // Anti-reopen: если эту stage недавно закрыли — не создаём заново (5 минут).
+    if (parsed.color === 'red' || parsed.color === 'yellow') {
+      try {
+        const { data: lastClosed, error: lastClosedError } = await supabase
+          .from('tasks')
+          .select('id, updated_at, ai_summary')
+          .eq('project_name', projectName)
+          .eq('status', 'closed')
+          .ilike('ai_summary', `%KEY:${taskKey}%`)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (lastClosedError) {
+          console.error('ANTI-REOPEN LOOKUP ERROR:', lastClosedError)
+        } else if (lastClosed?.updated_at) {
+          const diffMs = Date.now() - new Date(lastClosed.updated_at).getTime()
+          if (Number.isFinite(diffMs) && diffMs >= 0 && diffMs < 5 * 60 * 1000) {
+            return NextResponse.json({ ok: true, skipped: 'recently_closed' })
+          }
+        }
+      } catch (e) {
+        console.error('ANTI-REOPEN LOOKUP ERROR:', e)
+      }
     }
 
     let aiSummary = `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${taskKey}`
