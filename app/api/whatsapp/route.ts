@@ -278,6 +278,31 @@ function detectState(text: string): ParsedState {
   const red = includesAny(raw, RED_PHRASES)
   const yellow = includesAny(raw, YELLOW_PHRASES) || detectYellowByMeaning(raw)
 
+  // Negative должен побеждать DONE, кроме явно закрывающих формулировок.
+  const hasNegativeSignals =
+    raw.includes('нет материала') ||
+    raw.includes('не пришел') ||
+    raw.includes('не пришёл') ||
+    raw.includes('не поступил') ||
+    raw.includes('закончился материал') ||
+    raw.includes('срыв') ||
+    raw.includes('не успели') ||
+    raw.includes('не сделали') ||
+    raw.includes('просроч') ||
+    raw.includes('задерж') ||
+    raw.includes('не хватает') ||
+    raw.includes('сломал') ||
+    raw.includes('не работает') ||
+    red ||
+    yellow
+
+  const isExplicitClosing =
+    raw.includes('привезли готово') ||
+    raw.includes('сделали готово') ||
+    raw.includes('устранил') ||
+    raw.includes('устранили') ||
+    raw.includes('закрыли')
+
   const stage = detectStage(raw)
   const material = detectMaterial(raw)
   const reason = detectReason(raw)
@@ -298,15 +323,15 @@ function detectState(text: string): ParsedState {
     stage !== 'прочее' &&
     (reason !== 'прочее' || material !== 'не указан' || raw.includes('материал') || raw.includes('задерж') || raw.includes('риск'))
 
-  if (red || hasShortCriticalContext) {
+  if ((hasNegativeSignals && !isExplicitClosing && (red || hasShortCriticalContext)) || (red || hasShortCriticalContext)) {
     return { kind: 'problem', color: 'red', summary: 'Срыв сроков' }
   }
 
-  if (yellow || hasShortIssueContext) {
+  if (hasNegativeSignals && !isExplicitClosing && (yellow || hasShortIssueContext)) {
     return { kind: 'risk', color: 'yellow', summary: 'Есть риск' }
   }
 
-  if (done) {
+  if (done && (!hasNegativeSignals || isExplicitClosing)) {
     return { kind: 'done', color: 'green', summary: 'Работы завершены' }
   }
 
@@ -326,8 +351,6 @@ function buildTaskKey(projectName: string, incomingText: string, stage: string, 
     (reason || 'прочее') === 'прочее' &&
     (material || 'не указан') === 'не указан'
 
-  // Для red/yellow нужен стабильный ключ (проект+этап+причина+материал),
-  // а на текст падаем только если всё слишком общее.
   if (!isGeneric) {
     return `${slugify(projectName)}|${slugify(stage)}|${slugify(reason)}|${slugify(material)}`
   }
@@ -584,6 +607,44 @@ function materialMatches(summary: string, material: string) {
   return false
 }
 
+// ── Fuzzy-match: совпадают ли значимые токены входящего текста с полем строки ──
+function fuzzyTokenMatch(haystack: string, needle: string): boolean {
+  const h = normalizeForMatch(haystack)
+  const tokens = normalizeForMatch(needle)
+    .split(' ')
+    .filter((t) => t.length > 3)
+  if (tokens.length === 0) return false
+  return tokens.some((token) => h.includes(token))
+}
+
+async function sendTelegramEventIfConfigured(text: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN
+  const chatId = process.env.TELEGRAM_CHAT_ID
+  if (!token || !chatId) {
+    console.log('TELEGRAM EVENT SKIPPED (missing env):', { hasToken: Boolean(token), hasChatId: Boolean(chatId) })
+    return
+  }
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      console.error('TELEGRAM EVENT ERROR:', res.status, body)
+    }
+  } catch (e) {
+    console.error('TELEGRAM EVENT ERROR:', e)
+  }
+}
+
 async function closeExistingTaskIfDone(
   supabase: any,
   params: {
@@ -635,13 +696,51 @@ async function closeExistingTaskIfDone(
     return null
   }
 
-  // Приоритет закрытия: materialMatches > incoming-material-fallback > reason > stage.
-  const candidate =
+  // Приоритет: materialMatches > incoming-material-fallback > reason > stage > fallback (последняя активная)
+  const baseCandidate =
     (params.material !== 'не указан' ? byMaterialMatch() : null) ||
     byIncomingMaterialFallback() ||
     (params.reason !== 'прочее' ? byKeyIncludes(reasonKey) : null) ||
     (params.stage !== 'прочее' ? byKeyIncludes(stageKey) : null) ||
+    list[0] || // fallback: последняя активная задача проекта
     null
+
+  const scoreCloseCandidateTask = (task: any) => {
+    if (!task) return -999
+    const summary = String(task.ai_summary || '')
+    const incoming = normalizeForMatch(params.incomingText)
+    const createdAt = task.created_at ? new Date(task.created_at).getTime() : NaN
+
+    let score = 0
+    score += task.project_name === params.projectName ? 5 : -100
+
+    if (params.material !== 'не указан' && materialMatches(summary, params.material)) score += 4
+    if (params.stage !== 'прочее' && summary.includes(stageKey)) score += 3
+    if (params.reason !== 'прочее' && summary.includes(reasonKey)) score += 3
+
+    const sNorm = normalizeForMatch(summary)
+    if (params.material !== 'не указан' && incoming.includes(normalizeForMatch(params.material))) score += 2
+    if (params.material !== 'не указан' && sNorm.includes(normalizeForMatch(params.material))) score += 2
+    if (fuzzyTokenMatch(incoming, summary)) score += 2
+
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000
+    if (Number.isFinite(createdAt) && Date.now() - createdAt > fourteenDaysMs) score -= 3
+
+    return score
+  }
+
+  const scoredList = list
+    .map((t: any) => ({ t, score: scoreCloseCandidateTask(t) }))
+    .sort((a: any, b: any) => b.score - a.score)
+
+  const best = scoredList[0] || null
+  const candidate = best && best.score >= 5 ? best.t : null
+
+  console.log('CLOSE SCORE:', {
+    selectedCandidate: candidate ? { id: candidate.id, score: best.score } : null,
+    bestScore: best?.score ?? null,
+    baseCandidate: baseCandidate ? { id: baseCandidate.id } : null,
+  })
 
   if (!candidate) return null
 
@@ -798,49 +897,173 @@ async function syncProblemsIfPossible(
     return
   }
 
-  const existingActiveProblem = (projectProblems || []).find((p: any) => p.is_active === true && p.problem_key === problemKey)
-  const existingClosedProblem = (projectProblems || []).find((p: any) => p.is_active === false && p.problem_key === problemKey)
-  const activeStageProblem = (projectProblems || []).find((p: any) => p.is_active === true && p.stage === params.stage && params.stage !== 'прочее')
+  const allProblems: any[] = projectProblems || []
+
+  const existingActiveProblem = allProblems.find(
+    (p: any) => p.is_active === true && p.problem_key === problemKey
+  )
+  const existingClosedProblem = allProblems.find(
+    (p: any) => p.is_active === false && p.problem_key === problemKey
+  )
+  const activeStageProblem = allProblems.find(
+    (p: any) => p.is_active === true && p.stage === params.stage && params.stage !== 'прочее'
+  )
+
+  const activeStageMaterialProblems = allProblems.filter((p: any) => {
+    if (!p.is_active) return false
+    if (params.stage === 'прочее') return false
+    if (p.stage !== params.stage) return false
+
+    const pMaterial = normalizeForMatch(p.material || '')
+    const incoming = normalizeForMatch(params.title)
+    const detectedMat = normalizeForMatch(params.material)
+
+    return (
+      (pMaterial && incoming.includes(pMaterial)) ||
+      (detectedMat && pMaterial.includes(detectedMat)) ||
+      fuzzyTokenMatch(incoming, p.material || '')
+    )
+  })
+
+  const activeMaterialProblems = allProblems.filter((p: any) => {
+    if (!p.is_active) return false
+
+    const pMaterial = normalizeForMatch(p.material || '')
+    const incoming = normalizeForMatch(params.title)
+    const detectedMat = normalizeForMatch(params.material)
+
+    return (
+      (pMaterial && incoming.includes(pMaterial)) ||
+      (detectedMat && pMaterial.includes(detectedMat)) ||
+      fuzzyTokenMatch(incoming, p.material || '')
+    )
+  })
+
+  // Финальный кандидат для закрытия:
+  // 1. точное совпадение по key  2. fuzzy по material/title  3. по stage  4. первая активная (fallback)
+  const closingCandidate =
+    existingActiveProblem ||
+    activeStageMaterialProblems[0] ||
+    activeMaterialProblems[0] ||
+    activeStageProblem ||
+    allProblems.find((p: any) => p.is_active === true) ||
+    null
 
   let relatedProblemId: string | null = null
   let relatedProblemTitle: string | null = null
 
   if (params.parsed.kind === 'done') {
-    const candidate = existingActiveProblem || activeStageProblem
+    const incoming = normalizeForMatch(params.title)
+    const scoreCloseCandidateProblem = (p: any) => {
+      if (!p) return -999
+      const createdAt = p.first_seen_at ? new Date(p.first_seen_at).getTime() : NaN
+      let score = 0
 
-    if (candidate) {
-      relatedProblemId = candidate.id
-      relatedProblemTitle = candidate.title
+      score += p.project_name === params.projectName ? 5 : -100
 
-      await supabase
-        .from('problems')
-        .update({
-          status: 'closed',
-          is_active: false,
-          last_seen_at: new Date().toISOString(),
-          stage: params.stage,
-          material: params.material,
-          reason: params.reason,
-          responsible_person: params.senderName,
-          project_id: params.projectId,
-          project_name: params.projectName,
-          company_id: params.companyId,
-          employee_id: params.employeeId,
-          sender_phone: params.senderPhone,
-          photo_url: params.photoUrl || candidate.photo_url || null,
-        })
-        .eq('id', candidate.id)
+      if (params.material !== 'не указан') {
+        const pm = normalizeForMatch(p.material || '')
+        const dm = normalizeForMatch(params.material)
+        if ((pm && dm && pm.includes(dm)) || (pm && incoming.includes(pm)) || fuzzyTokenMatch(incoming, p.material || '')) {
+          score += 4
+        }
+      }
+
+      if (params.stage !== 'прочее' && p.stage === params.stage) score += 3
+      if (params.reason !== 'прочее' && p.reason === params.reason) score += 3
+
+      if (params.material !== 'не указан' && incoming.includes(normalizeForMatch(p.material || ''))) score += 2
+      if (fuzzyTokenMatch(incoming, String(p.title || '') + ' ' + String(p.ai_summary || ''))) score += 2
+
+      const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000
+      if (Number.isFinite(createdAt) && Date.now() - createdAt > fourteenDaysMs) score -= 3
+
+      return score
+    }
+
+    const activeCandidates = allProblems.filter((p: any) => p.is_active === true)
+    const scored = activeCandidates
+      .map((p: any) => ({ p, score: scoreCloseCandidateProblem(p) }))
+      .sort((a: any, b: any) => b.score - a.score)
+
+    const best = scored[0] || null
+    const target = best && best.score >= 5 ? best.p : null
+
+    console.log('CLOSING DEBUG:', {
+      incomingText: params.title,
+      detectedMaterial: params.material,
+      candidates: allProblems.map((p: any) => ({
+        id: p.id,
+        material: p.material,
+        title: p.title,
+        is_active: p.is_active,
+      })),
+      selected: target
+        ? {
+            id: target.id,
+            material: target.material,
+            title: target.title,
+          }
+        : null,
+    })
+
+    console.log('PROBLEM SYNC RESULT:', {
+      action: target ? 'closed' : 'skipped',
+      problemId: target?.id || null,
+      score: best?.score ?? null,
+    })
+
+    if (target) {
+      relatedProblemId = target.id
+      relatedProblemTitle = target.title
+
+      const closePayload: any = {
+        status: 'closed',
+        is_active: false,
+        last_seen_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        stage: params.stage,
+        material: params.material,
+        reason: params.reason,
+        responsible_person: params.senderName,
+        project_id: params.projectId,
+        project_name: params.projectName,
+        company_id: params.companyId,
+        employee_id: params.employeeId,
+        sender_phone: params.senderPhone,
+        photo_url: params.photoUrl || target.photo_url || null,
+      }
+
+      try {
+        const { error: closeError } = await supabase.from('problems').update(closePayload).eq('id', target.id)
+        if (closeError) {
+          const msg = String(closeError.message || '')
+          if (msg.toLowerCase().includes('updated_at')) {
+            const { updated_at, ...withoutUpdatedAt } = closePayload
+            const { error: retryError } = await supabase.from('problems').update(withoutUpdatedAt).eq('id', target.id)
+            if (retryError) console.error('PROBLEM CLOSE RETRY ERROR:', retryError)
+          } else {
+            console.error('PROBLEM CLOSE ERROR:', closeError)
+          }
+        }
+      } catch (e) {
+        console.error('PROBLEM CLOSE ERROR:', e)
+      }
 
       await addProblemHistory(supabase, {
-        problemId: candidate.id,
+        problemId: target.id,
         event: 'Проблема закрыта по факту выполнения',
         projectName: params.projectName,
-        problemTitle: candidate.title,
+        problemTitle: target.title,
         comment: params.title,
         companyId: params.companyId,
         employeeId: params.employeeId,
         senderPhone: params.senderPhone,
       })
+
+      await sendTelegramEventIfConfigured(
+        `✅ Проблема закрыта\nОбъект: ${params.projectName}\nПроблема: ${target.title}\nЗакрыто сообщением: ${params.title}\nОтветственный: ${params.senderName}`
+      )
     }
   }
 
@@ -881,6 +1104,10 @@ async function syncProblemsIfPossible(
       employeeId: params.employeeId,
       senderPhone: params.senderPhone,
     })
+
+    await sendTelegramEventIfConfigured(
+      `⚠️ Обновление проблемы\nОбъект: ${params.projectName}\nПроблема: ${existingActiveProblem.title}\nДлится: ${Number(existingActiveProblem.days_count || 1)} дн.\nОтветственный: ${params.senderName}`
+    )
   }
 
   if ((params.parsed.kind === 'problem' || params.parsed.kind === 'risk') && !existingActiveProblem) {
@@ -954,6 +1181,12 @@ async function syncProblemsIfPossible(
           employeeId: params.employeeId,
           senderPhone: params.senderPhone,
         })
+
+        const statusLabel = params.parsed.kind === 'problem' ? 'Просрочка' : 'Риск'
+        const icon = params.parsed.kind === 'problem' ? '🚨' : '⚠️'
+        await sendTelegramEventIfConfigured(
+          `${icon} ${params.projectName} — ${problemTitle}\nСтатус: ${statusLabel}\nЭтап: ${params.stage}\nМатериал: ${params.material}\nДлится: 0 дн`
+        )
       }
     }
   }
@@ -1078,7 +1311,7 @@ export async function POST(req: NextRequest) {
             projectName,
             taskId: closedTask.id,
             title,
-            parsed,
+            parsed: { ...parsed, kind: 'done' },
             stage,
             material,
             reason,
@@ -1126,8 +1359,8 @@ export async function POST(req: NextRequest) {
       console.error('DEDUPE/CLOSE ERROR, FALLBACK TO INSERT:', dedupeError)
     }
 
-    // Важно: очистка демо-базы выполняется вручную SQL, не из webhook.
-    const aiSummary = `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${taskKey}`
+    let aiSummary = `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${taskKey}`
+    if (photoUrl) aiSummary += ' (есть фото)'
 
     const taskPayload: Record<string, any> = {
       title,
