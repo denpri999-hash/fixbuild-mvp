@@ -600,9 +600,19 @@ async function addProblemMedia(
     senderName: string
     comment: string
     photoUrl: string
-    companyId?: string | null
+    companyId: string | null
   }
 ) {
+  if (!params.companyId) {
+    console.error('PROBLEM MEDIA SKIPPED (missing companyId):', {
+      problemId: params.problemId,
+      taskId: params.taskId,
+      projectId: params.projectId,
+      projectName: params.projectName,
+    })
+    return
+  }
+
   const { error } = await supabase.from('problem_media').insert([
     {
       task_id: params.taskId,
@@ -613,7 +623,8 @@ async function addProblemMedia(
       sender_name: params.senderName,
       comment: params.comment || null,
       photo_url: params.photoUrl,
-      company_id: params.companyId || null,
+      company_id: params.companyId,
+      created_at: new Date().toISOString(),
     },
   ])
 
