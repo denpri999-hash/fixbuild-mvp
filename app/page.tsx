@@ -233,7 +233,38 @@ export default function Page() {
       .limit(20)
 
     if (photoError) throw photoError
-    setMedia((photoArchiveData || []) as ProblemMedia[])
+    const primary = (photoArchiveData || []) as ProblemMedia[]
+    if (primary.length > 0) {
+      setMedia(primary)
+      return
+    }
+
+    // Fallback: старые записи могли быть без company_id; берём только media,
+    // которые привязаны к проблемам текущей компании (tenant isolation сохраняется).
+    const { data: companyProblems, error: problemsError } = await supabase
+      .from('problems')
+      .select('id')
+      .eq('company_id', companyId)
+      .limit(500)
+
+    if (problemsError) throw problemsError
+
+    const ids = (companyProblems || []).map((p: any) => p.id).filter(Boolean)
+    if (ids.length === 0) {
+      setMedia([])
+      return
+    }
+
+    const { data: fallbackMedia, error: fallbackError } = await supabase
+      .from('problem_media')
+      .select('id, photo_url, problem_title, project_name, sender_name, comment, created_at')
+      .in('problem_id', ids)
+      .not('photo_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (fallbackError) throw fallbackError
+    setMedia(((fallbackMedia || []) as ProblemMedia[]))
   }
 
   async function fetchAll() {
