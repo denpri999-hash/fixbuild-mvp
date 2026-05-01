@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useCompany } from '@/lib/useCompany'
 
 type Severity = 'green' | 'yellow' | 'red' | null
 
@@ -133,6 +134,8 @@ function normalizeNullable(value: string | null | undefined, fallback = 'Не у
 }
 
 export default function Page() {
+  const { companyId, loading: companyLoading } = useCompany()
+
   const [tasks, setTasks] = useState<Task[]>([])
   const [problems, setProblems] = useState<Problem[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -150,8 +153,6 @@ export default function Page() {
   const [telegramSending, setTelegramSending] = useState(false)
   const [selectedProblemForHistory, setSelectedProblemForHistory] = useState<string>('all')
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
-  const [companyId, setCompanyId] = useState<string | null>(null)
-  const [urlReady, setUrlReady] = useState(false)
   const [highlightedIssueId, setHighlightedIssueId] = useState<string | null>(null)
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
@@ -165,12 +166,9 @@ export default function Page() {
     let query = supabase
       .from('tasks')
       .select('id, title, planned_date, color_indicator, ai_summary, project_name, project_id, company_id, sender_name, sender_phone, photo_url, status, updated_at')
+      .eq('company_id', companyId)
       .order('updated_at', { ascending: false })
       .limit(300)
-
-    if (companyId) {
-      query = query.eq('company_id', companyId)
-    }
 
     const { data, error } = await query
     if (error) throw error
@@ -181,11 +179,8 @@ export default function Page() {
     let query = supabase
       .from('problems')
       .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, photo_url, problem_key, grouping_key')
+      .eq('company_id', companyId)
       .order('last_seen_at', { ascending: false })
-
-    if (companyId) {
-      query = query.eq('company_id', companyId)
-    }
 
     const { data, error } = await query
     if (error) throw error
@@ -196,11 +191,8 @@ export default function Page() {
     let query = supabase
       .from('projects')
       .select('id, name, company_id')
+      .eq('company_id', companyId)
       .order('name', { ascending: true })
-
-    if (companyId) {
-      query = query.eq('company_id', companyId)
-    }
 
     const { data, error } = await query
     if (error) throw error
@@ -208,23 +200,27 @@ export default function Page() {
   }
 
   async function fetchHistory() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('problem_history')
       .select('id, problem_id, event, project_name, problem_title, comment, created_at')
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(500)
 
+    const { data, error } = await query
     if (error) throw error
     setHistory((data || []) as ProblemHistory[])
   }
 
   async function fetchMedia() {
-    const { data, error } = await supabase
+    let query = supabase
       .from('problem_media')
       .select('id, task_id, problem_id, project_id, project_name, problem_title, sender_name, comment, photo_url, created_at')
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(300)
 
+    const { data, error } = await query
     if (error) throw error
     setMedia((data || []) as ProblemMedia[])
   }
@@ -242,17 +238,11 @@ export default function Page() {
   }
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    setCompanyId(params.get('company_id'))
-    setUrlReady(true)
-  }, [])
-
-  useEffect(() => {
-    if (urlReady) {
+    if (companyId) {
       setSelectedProject('all')
       fetchAll()
     }
-  }, [urlReady, companyId])
+  }, [companyId])
 
   useEffect(() => {
     try {
@@ -437,9 +427,7 @@ export default function Page() {
 
   const filteredHistory = useMemo(() => {
     let scoped = selectedProject === 'all' ? history : history.filter((h) => h.project_name === selectedProject)
-    if (companyId) {
-      scoped = scoped.filter((h) => h.project_name ? visibleProjectNames.has(h.project_name) : false)
-    }
+    scoped = scoped.filter((h) => h.project_name ? visibleProjectNames.has(h.project_name) : false)
     if (selectedProblemForHistory !== 'all') {
       scoped = scoped.filter((h) => h.problem_id === selectedProblemForHistory)
     }
@@ -455,11 +443,11 @@ export default function Page() {
 
   const filteredMedia = useMemo(() => {
     return media
-      .filter((m) => !companyId || (m.project_name ? visibleProjectNames.has(m.project_name) : false))
+      .filter((m) => (m.project_name ? visibleProjectNames.has(m.project_name) : false))
       .filter((m) => selectedProject === 'all' || m.project_name === selectedProject)
       .filter((m) => isInsideDateRange(m.created_at, dateFrom, dateTo))
       .slice(0, 20)
-  }, [media, selectedProject, dateFrom, dateTo, companyId, visibleProjectNames])
+  }, [media, selectedProject, dateFrom, dateTo, visibleProjectNames])
 
   const unifiedEvents = useMemo(() => {
     const items: Array<{
@@ -682,6 +670,14 @@ export default function Page() {
   const greenCount = projectFilteredTasks.filter((t) => t.color_indicator === 'green').length
   const attentionCount = activeProblemsBase.length
 
+  if (companyLoading) {
+    return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
+  }
+
+  if (!companyId) {
+    return <main style={pageWrap}><div style={loadingBox}>Компания не найдена</div></main>
+  }
+
   if (loading) {
     return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
   }
@@ -710,15 +706,9 @@ export default function Page() {
 
         {errorText ? <div style={errorBox}>{errorText}</div> : null}
 
-        {companyId ? (
-          <div style={clientModeBox}>
-            Режим клиента: данные отфильтрованы по компании. company_id: {companyId}
-          </div>
-        ) : (
-          <div style={warningBox}>
-            Внимание: открыт общий режим. Для клиента используйте ссылку с company_id.
-          </div>
-        )}
+        <div style={clientModeBox}>
+          Режим клиента: данные отфильтрованы по компании. company_id: {companyId}
+        </div>
 
         {/* KPI */}
         <section style={kpiGrid}>
