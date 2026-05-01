@@ -39,6 +39,7 @@ type Problem = {
   material: string | null
   reason: string | null
   responsible_person: string | null
+  sender_phone?: string | null
   photo_url: string | null
   problem_key: string | null
   grouping_key: string | null
@@ -181,7 +182,7 @@ export default function Page() {
   async function fetchProblems() {
     let query = supabase
       .from('problems')
-      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, photo_url, problem_key, grouping_key')
+      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key')
       .eq('company_id', companyId)
       .order('last_seen_at', { ascending: false })
 
@@ -563,6 +564,30 @@ export default function Page() {
     window.setTimeout(() => setUiToast(null), 2200)
   }
 
+  function normalizePhoneForWaLink(value: string | null | undefined) {
+    const digits = String(value || '').replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.length === 11 && digits.startsWith('8')) return `7${digits.slice(1)}`
+    return digits
+  }
+
+  function requestUpdate(problem: Problem) {
+    const phone = normalizePhoneForWaLink(problem.sender_phone)
+    if (!phone) {
+      console.error('requestUpdate: missing sender_phone for problem', { problemId: problem.id })
+      showToast('Нет телефона для запроса обновления')
+      return
+    }
+
+    const stage = problem.stage || 'этап'
+    const project = problem.project_name || 'объект'
+    const text = `Добрый день! Нужен статус по объекту ${project}, этап: ${stage}. Напишите, пожалуйста, актуальное обновление.`
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+
+    window.open(url, '_blank', 'noopener,noreferrer')
+    showToast('Открыт WhatsApp для запроса')
+  }
+
   const reportText = useMemo(() => {
     const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
     const yellowCount = activeProblemsBase.filter((p) => p.severity === 'yellow').length
@@ -870,7 +895,7 @@ export default function Page() {
                         <td style={cell}>
                           <div style={actionsCol}>
                             <button style={actionChip} onClick={() => showToast('UI: Взято на контроль')}>Взять на контроль</button>
-                            <button style={actionChip} onClick={() => showToast('UI: Запрос отправлен')}>Запросить обновление</button>
+                            <button style={actionChip} onClick={() => requestUpdate(problem)}>Запросить обновление</button>
                             <button
                               style={actionChipDanger}
                               onClick={() => showToast('UI: Закрытие (без backend)')}
