@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useCompany } from '@/lib/useCompany'
 
@@ -134,6 +135,7 @@ function normalizeNullable(value: string | null | undefined, fallback = 'Не у
 }
 
 export default function Page() {
+  const router = useRouter()
   const { companyId, loading: companyLoading } = useCompany()
 
   const [tasks, setTasks] = useState<Task[]>([])
@@ -161,6 +163,7 @@ export default function Page() {
   const [stageFilter, setStageFilter] = useState<string>('all')
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
   const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
+  const [userEmail, setUserEmail] = useState<string>('')
 
   async function fetchTasks() {
     let query = supabase
@@ -190,7 +193,7 @@ export default function Page() {
   async function fetchProjects() {
     let query = supabase
       .from('projects')
-      .select('id, name, company_id')
+      .select('id, name')
       .eq('company_id', companyId)
       .order('name', { ascending: true })
 
@@ -237,6 +240,34 @@ export default function Page() {
     }
   }
 
+  useEffect(() => {
+    let active = true
+
+    async function loadUser() {
+      try {
+        const { data } = await supabase.auth.getUser()
+        if (!active) return
+        setUserEmail(data?.user?.email || '')
+      } catch (e) {
+        console.error('Failed to load user:', e)
+        if (!active) return
+        setUserEmail('')
+      }
+    }
+
+    loadUser()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  async function logout() {
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      router.push('/login')
+    }
+  }
   useEffect(() => {
     if (companyId) {
       setSelectedProject('all')
@@ -701,6 +732,10 @@ export default function Page() {
             <input style={dateInput} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input style={dateInput} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             <button style={secondaryButton} onClick={fetchAll}>Обновить</button>
+            <div style={authChip}>
+              <span>{userEmail || '—'}</span>
+              <button style={secondaryMiniButton} onClick={logout}>Выйти</button>
+            </div>
           </div>
         </header>
 
@@ -1346,3 +1381,4 @@ const modalOverlay: CSSProperties = { position: 'fixed', inset: 0, background: '
 const modalCard: CSSProperties = { width: 'min(760px, 100%)', maxHeight: '82vh', overflow: 'auto', background: '#fff', borderRadius: 18, padding: 18, boxShadow: '0 18px 60px rgba(15,23,42,.25)' }
 const modalHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 12 }
 const modalList: CSSProperties = { display: 'grid', gap: 10 }
+const authChip: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: 999, background: '#fff', fontWeight: 800, color: '#334155' }
