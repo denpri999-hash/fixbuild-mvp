@@ -301,7 +301,8 @@ function detectState(text: string): ParsedState {
     raw.includes('сделали готово') ||
     raw.includes('устранил') ||
     raw.includes('устранили') ||
-    raw.includes('закрыли')
+    raw.includes('закрыли') ||
+    raw.includes('завершили')
 
   const stage = detectStage(raw)
   const material = detectMaterial(raw)
@@ -323,17 +324,13 @@ function detectState(text: string): ParsedState {
     stage !== 'прочее' &&
     (reason !== 'прочее' || material !== 'не указан' || raw.includes('материал') || raw.includes('задерж') || raw.includes('риск'))
 
-  if ((hasNegativeSignals && !isExplicitClosing && (red || hasShortCriticalContext)) || (red || hasShortCriticalContext)) {
-    return { kind: 'problem', color: 'red', summary: 'Срыв сроков' }
-  }
-
-  if (hasNegativeSignals && !isExplicitClosing && (yellow || hasShortIssueContext)) {
+  if (hasNegativeSignals && !isExplicitClosing) {
+    if (red || hasShortCriticalContext) return { kind: 'problem', color: 'red', summary: 'Срыв сроков' }
+    if (yellow || hasShortIssueContext) return { kind: 'risk', color: 'yellow', summary: 'Есть риск' }
     return { kind: 'risk', color: 'yellow', summary: 'Есть риск' }
   }
 
-  if (done && (!hasNegativeSignals || isExplicitClosing)) {
-    return { kind: 'done', color: 'green', summary: 'Работы завершены' }
-  }
+  if (done) return { kind: 'done', color: 'green', summary: 'Работы завершены' }
 
   return { kind: 'normal', color: 'green', summary: 'Всё по плану' }
 }
@@ -899,6 +896,50 @@ async function syncProblemsIfPossible(
 
   const allProblems: any[] = projectProblems || []
 
+  // Авто-дедуп активных проблем по одному problem_key: оставляем самую "свежую", остальные закрываем.
+  try {
+    const activeSameKey = allProblems.filter((p: any) => p.is_active === true && p.problem_key === problemKey)
+    if (activeSameKey.length > 1) {
+      const sorted = [...activeSameKey].sort((a: any, b: any) => {
+        const ta = new Date(a.last_seen_at || a.first_seen_at || 0).getTime()
+        const tb = new Date(b.last_seen_at || b.first_seen_at || 0).getTime()
+        return tb - ta
+      })
+      const keep = sorted[0]
+      const toClose = sorted.slice(1)
+
+      for (const dup of toClose) {
+        try {
+          await supabase
+            .from('problems')
+            .update({
+              status: 'closed',
+              is_active: false,
+              last_seen_at: new Date().toISOString(),
+              responsible_person: params.senderName,
+              sender_phone: params.senderPhone,
+            })
+            .eq('id', dup.id)
+
+          await addProblemHistory(supabase, {
+            problemId: dup.id,
+            event: 'Автозакрытие дубля проблемы',
+            projectName: params.projectName,
+            problemTitle: dup.title || 'дубль',
+            comment: `Дубль закрыт автоматически. Основная проблема: ${keep?.id || 'unknown'}`,
+            companyId: params.companyId,
+            employeeId: params.employeeId,
+            senderPhone: params.senderPhone,
+          })
+        } catch (e) {
+          console.error('PROBLEM DEDUPE CLOSE ERROR:', e)
+        }
+      }
+    }
+  } catch (e) {
+    console.error('PROBLEM DEDUPE ERROR:', e)
+  }
+
   const existingActiveProblem = allProblems.find(
     (p: any) => p.is_active === true && p.problem_key === problemKey
   )
@@ -1185,13 +1226,21 @@ async function syncProblemsIfPossible(
         const statusLabel = params.parsed.kind === 'problem' ? 'Просрочка' : 'Риск'
         const icon = params.parsed.kind === 'problem' ? '🚨' : '⚠️'
         await sendTelegramEventIfConfigured(
-          `${icon} ${params.projectName} — ${problemTitle}\nСтатус: ${statusLabel}\nЭтап: ${params.stage}\nМатериал: ${params.material}\nДлится: 0 дн`
+          `${icon} FixBuild\n` +
+          `Объект: ${params.projectName}\n` +
+          `Статус: ${statusLabel}\n` +
+          `Проблема: ${problemTitle}\n` +
+          `Этап: ${params.stage}\n` +
+          `Причина: ${params.reason}\n` +
+          `Материал: ${params.material}\n` +
+          `Ответственный: ${params.senderName}\n` +
+          `Длится: 1 дн.`
         )
       }
     }
   }
 
-  if (params.photoUrl) {
+  if (params.photoUrl && relatedProblemId) {
     await addProblemMedia(supabase, {
       taskId: params.taskId,
       problemId: relatedProblemId,
@@ -1264,6 +1313,11 @@ export async function POST(req: NextRequest) {
     const reason = detectReason(cleanedText || title)
     const taskKey = buildTaskKey(detectedProjectName, title, stage, reason, material)
 
+    const rawPhotoUrl =
+      body?.messageData?.imageMessageData?.downloadUrl ||
+      body?.messageData?.fileMessageData?.downloadUrl ||
+      null
+
     let whatsappInstance: any = null
     let employee: any = null
     let companyId: string | null = null
@@ -1280,15 +1334,35 @@ export async function POST(req: NextRequest) {
       employeeId = employee?.id || null
       senderName = employee?.name || senderNameFromWebhook
 
+      try {
+        const { data: contact, error: contactError } = await supabase
+          .from('contacts')
+          .select('name, project_name, role')
+          .eq('phone', senderPhone)
+          .limit(1)
+          .maybeSingle()
+
+        if (contactError) {
+          console.log('CONTACTS LOOKUP SKIPPED:', { message: contactError.message })
+        } else if (contact) {
+          if (contact.name) senderName = contact.name
+          if (contact.project_name) projectName = contact.project_name
+        }
+      } catch (e) {
+        console.log('CONTACTS LOOKUP SKIPPED:', e)
+      }
+
       if (companyId && detectedProjectName !== 'Входящие WhatsApp') {
         project = await ensureProject(supabase, detectedProjectName, companyId)
         projectName = project?.name || detectedProjectName
       }
 
-      photoUrl = await uploadPhotoIfAny(supabase, body, projectName)
+      photoUrl = (await uploadPhotoIfAny(supabase, body, projectName)) || rawPhotoUrl
     } catch (routingError) {
       console.error('ROUTING/MEDIA ERROR, CONTINUE WITH TASK:', routingError)
     }
+
+    console.log('WHATSAPP PARSED:', { title, projectName, stage, reason, material, parsed, senderName })
 
     try {
       if (parsed.kind === 'done' || parsed.color === 'green' || isClosingByText(title)) {
@@ -1335,6 +1409,8 @@ export async function POST(req: NextRequest) {
         senderName,
         senderPhone,
       })
+
+      console.log('DEDUP RESULT:', { taskKey, updated: Boolean(existingTask) })
 
       if (existingTask) {
         await syncProblemsIfPossible(supabase, {
