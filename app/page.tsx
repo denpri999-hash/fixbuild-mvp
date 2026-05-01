@@ -222,7 +222,9 @@ export default function Page() {
   }
 
   async function fetchMedia() {
-    const { data, error } = await supabase
+    if (!companyId) return
+
+    const { data: photoArchiveData, error: photoError } = await supabase
       .from('problem_media')
       .select('id, photo_url, problem_title, project_name, sender_name, comment, created_at')
       .eq('company_id', companyId)
@@ -230,8 +232,8 @@ export default function Page() {
       .order('created_at', { ascending: false })
       .limit(20)
 
-    if (error) throw error
-    setMedia((data || []) as ProblemMedia[])
+    if (photoError) throw photoError
+    setMedia((photoArchiveData || []) as ProblemMedia[])
   }
 
   async function fetchAll() {
@@ -1133,13 +1135,13 @@ export default function Page() {
         <section style={panel}>
           <div style={sectionTitle}>Фотоархив</div>
           <div style={sectionSubTitle}>Фото, объект и дата</div>
-          {filteredMedia.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
-            <div style={photoGrid}>{filteredMedia.map((item) => (
+          {media.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
+            <div style={photoGrid}>{media.map((item) => (
               <div key={item.id} style={photoCard}>
                 <a href={item.photo_url} target="_blank" rel="noreferrer" style={photoLink}><img src={item.photo_url} alt="Фото объекта" style={photoImage} /></a>
                 <div style={photoMeta}>
-                  <div style={listTitleSmall}>{item.problem_title || 'Фото'}</div>
                   <div style={metaLine}>{item.project_name || 'Без проекта'}</div>
+                  <div style={listTitleSmall}>{item.problem_title || 'Фото'}</div>
                   <div style={metaLine}>{formatDateTime(item.created_at)}</div>
                 </div>
               </div>
