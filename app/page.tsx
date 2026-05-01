@@ -165,6 +165,10 @@ export default function Page() {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
   const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
   const [userEmail, setUserEmail] = useState<string>('')
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [telegramEnabled, setTelegramEnabled] = useState(false)
+  const [telegramChatId, setTelegramChatId] = useState('')
+  const [telegramSaving, setTelegramSaving] = useState(false)
 
   async function fetchTasks() {
     let query = supabase
@@ -241,6 +245,96 @@ export default function Page() {
     }
   }
 
+  useEffect(() => {
+    if (!companyId) return
+    let active = true
+
+    async function ensureSettings() {
+      try {
+        setSettingsLoading(true)
+
+        const { data: settings, error } = await supabase
+          .from('company_settings')
+          .select('company_id, telegram_enabled, telegram_chat_id')
+          .eq('company_id', companyId)
+          .limit(1)
+          .maybeSingle()
+
+        if (!active) return
+
+        if (error) {
+          console.error('SETTINGS LOAD ERROR:', error)
+          return
+        }
+
+        if (!settings) {
+          const { error: insertError } = await supabase.from('company_settings').insert([
+            { company_id: companyId, telegram_enabled: false, telegram_chat_id: '' },
+          ])
+          if (insertError) {
+            console.error('SETTINGS INSERT ERROR:', insertError)
+            return
+          }
+          setTelegramEnabled(false)
+          setTelegramChatId('')
+          return
+        }
+
+        setTelegramEnabled(Boolean(settings.telegram_enabled))
+        setTelegramChatId(String(settings.telegram_chat_id || ''))
+      } catch (e) {
+        console.error('SETTINGS LOAD ERROR:', e)
+      } finally {
+        if (!active) return
+        setSettingsLoading(false)
+      }
+    }
+
+    ensureSettings()
+    return () => {
+      active = false
+    }
+  }, [companyId])
+
+  async function saveTelegramChatId() {
+    if (!companyId) return
+    if (telegramSaving) return
+    try {
+      setTelegramSaving(true)
+      const { error } = await supabase
+        .from('company_settings')
+        .update({ telegram_chat_id: telegramChatId })
+        .eq('company_id', companyId)
+      if (error) throw error
+      showToast('Сохранено')
+    } catch (e) {
+      console.error('SETTINGS SAVE ERROR:', e)
+      showToast('Ошибка сохранения')
+    } finally {
+      setTelegramSaving(false)
+    }
+  }
+
+  async function toggleTelegramEnabled() {
+    if (!companyId) return
+    if (telegramSaving) return
+    try {
+      setTelegramSaving(true)
+      const next = !telegramEnabled
+      setTelegramEnabled(next)
+      const { error } = await supabase
+        .from('company_settings')
+        .update({ telegram_enabled: next })
+        .eq('company_id', companyId)
+      if (error) throw error
+    } catch (e) {
+      console.error('SETTINGS TOGGLE ERROR:', e)
+      setTelegramEnabled((v) => !v)
+      showToast('Ошибка обновления')
+    } finally {
+      setTelegramSaving(false)
+    }
+  }
   useEffect(() => {
     let active = true
 
@@ -1176,6 +1270,52 @@ export default function Page() {
             </table>
           </div>
         </CollapsibleSection>
+
+        <section style={panel}>
+          <div style={sectionTitle}>Настройки уведомлений</div>
+          <div style={sectionSubTitle}>Управление Telegram уведомлениями для вашей компании</div>
+
+          {settingsLoading ? (
+            <div style={emptyBox}>Загрузка настроек...</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 900 }}>Telegram уведомления</div>
+                <div style={toggleGroup}>
+                  <button style={telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
+                    ВКЛ
+                  </button>
+                  <button style={!telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
+                    ВЫКЛ
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 900 }}>Chat ID:</div>
+                <input
+                  style={{ ...dateInput, minWidth: 260 }}
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="123456789"
+                />
+                <button style={secondaryButton} onClick={saveTelegramChatId} disabled={telegramSaving}>
+                  {telegramSaving ? 'Сохраняем...' : 'Сохранить'}
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontWeight: 900 }}>Уведомлять при:</div>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                  <input type="checkbox" checked readOnly /> Проблема
+                </label>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                  <input type="checkbox" checked readOnly /> Риск
+                </label>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
 
       {uiToast ? (

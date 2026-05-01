@@ -657,11 +657,40 @@ function fuzzyTokenMatch(haystack: string, needle: string): boolean {
   return tokens.some((token) => h.includes(token))
 }
 
-async function sendTelegramEventIfConfigured(text: string) {
-  const token = process.env.TELEGRAM_BOT_TOKEN
-  const chatId = process.env.TELEGRAM_CHAT_ID
+async function sendTelegramEventIfConfigured(text: string, companyId: string | null, supabase: any) {
+  if (!companyId) return
+
+  let token = process.env.TELEGRAM_BOT_TOKEN
+  let chatId = process.env.TELEGRAM_CHAT_ID
+
+  try {
+    const { data: settings, error } = await supabase
+      .from('company_settings')
+      .select('telegram_enabled, telegram_chat_id, telegram_bot_token')
+      .eq('company_id', companyId)
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.error('TELEGRAM SETTINGS ERROR:', error)
+      return
+    }
+
+    if (settings) {
+      if (!settings.telegram_enabled) return
+      chatId = settings.telegram_chat_id || chatId
+      token = settings.telegram_bot_token || token
+    } else {
+      // если настроек нет — по умолчанию считаем уведомления выключенными (безопасно)
+      return
+    }
+  } catch (e) {
+    console.error('TELEGRAM SETTINGS ERROR:', e)
+    return
+  }
+
   if (!token || !chatId) {
-    console.log('TELEGRAM EVENT SKIPPED (missing env):', { hasToken: Boolean(token), hasChatId: Boolean(chatId) })
+    console.log('TELEGRAM EVENT SKIPPED (missing token/chat):', { hasToken: Boolean(token), hasChatId: Boolean(chatId) })
     return
   }
 
@@ -672,6 +701,7 @@ async function sendTelegramEventIfConfigured(text: string) {
       body: JSON.stringify({
         chat_id: chatId,
         text,
+        parse_mode: 'HTML',
         disable_web_page_preview: true,
       }),
     })
@@ -1148,7 +1178,9 @@ async function syncProblemsIfPossible(
       })
 
       await sendTelegramEventIfConfigured(
-        `✅ Проблема закрыта\nОбъект: ${params.projectName}\nПроблема: ${target.title}\nЗакрыто сообщением: ${params.title}\nОтветственный: ${params.senderName}`
+        `✅ Проблема закрыта\nОбъект: ${params.projectName}\nПроблема: ${target.title}\nЗакрыто сообщением: ${params.title}\nОтветственный: ${params.senderName}`,
+        params.companyId,
+        supabase
       )
     }
   }
@@ -1192,7 +1224,9 @@ async function syncProblemsIfPossible(
     })
 
     await sendTelegramEventIfConfigured(
-      `⚠️ Обновление проблемы\nОбъект: ${params.projectName}\nПроблема: ${existingActiveProblem.title}\nДлится: ${Number(existingActiveProblem.days_count || 1)} дн.\nОтветственный: ${params.senderName}`
+      `⚠️ Обновление проблемы\nОбъект: ${params.projectName}\nПроблема: ${existingActiveProblem.title}\nДлится: ${Number(existingActiveProblem.days_count || 1)} дн.\nОтветственный: ${params.senderName}`,
+      params.companyId,
+      supabase
     )
   }
 
@@ -1279,7 +1313,9 @@ async function syncProblemsIfPossible(
           `Причина: ${params.reason}\n` +
           `Материал: ${params.material}\n` +
           `Ответственный: ${params.senderName}\n` +
-          `Длится: 1 дн.`
+          `Длится: 1 дн.`,
+          params.companyId,
+          supabase
         )
       }
     }
