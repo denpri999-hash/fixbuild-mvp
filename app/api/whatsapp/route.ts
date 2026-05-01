@@ -623,9 +623,22 @@ async function closeExistingTaskIfDone(
   const byMaterialMatch = () =>
     list.find((task: any) => materialMatches(String(task.ai_summary || ''), params.material))
 
-  // Приоритет закрытия: materialMatches > reason > stage.
+  const normalizedIncoming = normalizeForMatch(params.incomingText)
+  const byIncomingMaterialFallback = () => {
+    const pick = (token: string) =>
+      list.find((task: any) => normalizeForMatch(String(task.ai_summary || '')).includes(token))
+
+    if (normalizedIncoming.includes('бетон')) return pick('бетон')
+    if (normalizedIncoming.includes('арматур')) return pick('арматур')
+    if (normalizedIncoming.includes('кабел')) return pick('кабел')
+    if (normalizedIncoming.includes('труб')) return pick('труб')
+    return null
+  }
+
+  // Приоритет закрытия: materialMatches > incoming-material-fallback > reason > stage.
   const candidate =
     (params.material !== 'не указан' ? byMaterialMatch() : null) ||
+    byIncomingMaterialFallback() ||
     (params.reason !== 'прочее' ? byKeyIncludes(reasonKey) : null) ||
     (params.stage !== 'прочее' ? byKeyIncludes(stageKey) : null) ||
     null
