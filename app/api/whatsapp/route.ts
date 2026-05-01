@@ -557,6 +557,7 @@ async function addProblemMedia(
     senderName: string
     comment: string
     photoUrl: string
+    companyId?: string | null
   }
 ) {
   const { error } = await supabase.from('problem_media').insert([
@@ -569,6 +570,7 @@ async function addProblemMedia(
       sender_name: params.senderName,
       comment: params.comment || null,
       photo_url: params.photoUrl,
+      company_id: params.companyId || null,
     },
   ])
 
@@ -1250,6 +1252,7 @@ async function syncProblemsIfPossible(
       senderName: params.senderName,
       comment: params.title,
       photoUrl: params.photoUrl,
+      companyId: params.companyId,
     })
   }
 }
@@ -1333,6 +1336,18 @@ export async function POST(req: NextRequest) {
       companyId = whatsappInstance?.company_id || employee?.company_id || null
       employeeId = employee?.id || null
       senderName = employee?.name || senderNameFromWebhook
+
+      if (!companyId) {
+        const idInstance =
+          body?.idInstance ||
+          body?.instanceData?.idInstance ||
+          body?.instanceData?.idinstance ||
+          body?.instanceData?.id_instance ||
+          null
+
+        console.log('No company for instance:', idInstance)
+        return NextResponse.json({ ok: true })
+      }
 
       try {
         const { data: contact, error: contactError } = await supabase
