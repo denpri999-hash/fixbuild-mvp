@@ -568,6 +568,22 @@ async function safeInsertTask(supabase: any, payload: Record<string, any>) {
   return supabase.from('tasks').insert([finalPayload]).select().single()
 }
 
+function materialMatches(summary: string, material: string) {
+  const s = normalizeForMatch(summary)
+  const m = normalizeForMatch(material)
+
+  if (!m || m === 'не указан') return false
+  if (s.includes(`материал ${m}`)) return true
+  if (s.includes(m)) return true
+
+  if (m.includes('бетон') && s.includes('бетон')) return true
+  if (m.includes('арматур') && s.includes('арматур')) return true
+  if (m.includes('кабел') && s.includes('кабел')) return true
+  if (m.includes('труб') && s.includes('труб')) return true
+
+  return false
+}
+
 async function closeExistingTaskIfDone(
   supabase: any,
   params: {
@@ -603,12 +619,13 @@ async function closeExistingTaskIfDone(
   const reasonKey = `Причина: ${params.reason}`
 
   const list = candidates || []
-  const byKeyIncludes = (key: string) =>
-    list.find((task: any) => String(task.ai_summary || '').includes(key))
+  const byKeyIncludes = (key: string) => list.find((task: any) => String(task.ai_summary || '').includes(key))
+  const byMaterialMatch = () =>
+    list.find((task: any) => materialMatches(String(task.ai_summary || ''), params.material))
 
-  // Приоритет закрытия: material > reason > stage.
+  // Приоритет закрытия: materialMatches > reason > stage.
   const candidate =
-    (params.material !== 'не указан' ? byKeyIncludes(materialKey) : null) ||
+    (params.material !== 'не указан' ? byMaterialMatch() : null) ||
     (params.reason !== 'прочее' ? byKeyIncludes(reasonKey) : null) ||
     (params.stage !== 'прочее' ? byKeyIncludes(stageKey) : null) ||
     null
@@ -620,7 +637,7 @@ async function closeExistingTaskIfDone(
     .update({
       status: 'closed',
       color_indicator: 'green',
-      ai_summary: `Проблема закрыта по сообщению WhatsApp: ${params.incomingText}. KEY:${params.taskKey}`,
+      ai_summary: `Проблема закрыта по сообщению WhatsApp: ${params.incomingText}`,
       updated_at: new Date().toISOString(),
       sender_name: params.senderName,
       sender_phone: params.senderPhone || null,
