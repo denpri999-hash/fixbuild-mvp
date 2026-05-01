@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useCompany } from '@/lib/useCompany'
 
@@ -134,7 +135,9 @@ function normalizeNullable(value: string | null | undefined, fallback = 'Не у
 }
 
 export default function Page() {
+  const router = useRouter()
   const { companyId, loading: companyLoading } = useCompany()
+  const [authLoading, setAuthLoading] = useState(true)
 
   const [tasks, setTasks] = useState<Task[]>([])
   const [problems, setProblems] = useState<Problem[]>([])
@@ -234,6 +237,43 @@ export default function Page() {
       setErrorText(err?.message || 'Ошибка загрузки данных')
     } finally {
       setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+
+    async function check() {
+      try {
+        const { data } = await supabase.auth.getSession()
+        const session = data?.session
+        if (!active) return
+        if (!session) {
+          router.replace('/login')
+          return
+        }
+      } catch (e) {
+        console.error('Auth session check failed:', e)
+        if (!active) return
+        router.replace('/login')
+        return
+      } finally {
+        if (!active) return
+        setAuthLoading(false)
+      }
+    }
+
+    check()
+    return () => {
+      active = false
+    }
+  }, [router])
+
+  async function logout() {
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      router.push('/login')
     }
   }
 
@@ -670,7 +710,7 @@ export default function Page() {
   const greenCount = projectFilteredTasks.filter((t) => t.color_indicator === 'green').length
   const attentionCount = activeProblemsBase.length
 
-  if (companyLoading) {
+  if (authLoading || companyLoading) {
     return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
   }
 
@@ -701,6 +741,7 @@ export default function Page() {
             <input style={dateInput} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input style={dateInput} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             <button style={secondaryButton} onClick={fetchAll}>Обновить</button>
+            <button style={secondaryButton} onClick={logout}>Выйти</button>
           </div>
         </header>
 
