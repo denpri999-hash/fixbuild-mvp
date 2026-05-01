@@ -45,6 +45,18 @@ function sanitizeTitle(value: string) {
   return trimmed
 }
 
+function isClosingByText(text: string) {
+  const t = normalizeForMatch(text || '')
+  return (
+    t.includes('готово') ||
+    t.includes('сделали') ||
+    t.includes('привезли') ||
+    t.includes('закрыли') ||
+    t.includes('устранили') ||
+    t.includes('завершили')
+  )
+}
+
 function normalizePhone(raw: string | null | undefined): string {
   if (!raw) return ''
 
@@ -309,11 +321,20 @@ function buildProblemKey(projectName: string, stage: string, reason: string, mat
 function buildTaskKey(projectName: string, incomingText: string, stage: string, reason: string, material: string) {
   const normalizedText = normalizeForMatch(incomingText)
 
-  if (normalizedText) {
-    return `${slugify(projectName)}|text|${slugify(normalizedText)}`
+  const isGeneric =
+    (stage || 'прочее') === 'прочее' &&
+    (reason || 'прочее') === 'прочее' &&
+    (material || 'не указан') === 'не указан'
+
+  // Для red/yellow нужен стабильный ключ (проект+этап+причина+материал),
+  // а на текст падаем только если всё слишком общее.
+  if (!isGeneric) {
+    return `${slugify(projectName)}|${slugify(stage)}|${slugify(reason)}|${slugify(material)}`
   }
 
-  return `${slugify(projectName)}|${slugify(stage)}|${slugify(reason)}|${slugify(material)}`
+  if (normalizedText) return `${slugify(projectName)}|text|${slugify(normalizedText)}`
+
+  return `${slugify(projectName)}|прочее|прочее|не_указан`
 }
 
 function buildProblemTitle(stage: string, reason: string, material: string, fallbackText: string) {
@@ -452,27 +473,30 @@ async function uploadPhotoIfAny(supabase: any, body: any, projectName: string) {
 
   if (!media.isImage || !media.downloadUrl) return null
 
-  const response = await fetch(media.downloadUrl)
-  if (!response.ok) throw new Error(`Failed to download image: ${response.status}`)
+  try {
+    const response = await fetch(media.downloadUrl)
+    if (!response.ok) throw new Error(`Failed to download image: ${response.status}`)
 
-  const arrayBuffer = await response.arrayBuffer()
-  const bytes = new Uint8Array(arrayBuffer)
+    const arrayBuffer = await response.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
 
-  const safeProject = toStorageSafeSlug(projectName || 'project')
-  const safeFileName = toStorageSafeFileName(media.fileName || `${Date.now()}.jpg`)
-  const path = `tasks/${safeProject}/${Date.now()}-${safeFileName}`
+    const safeProject = toStorageSafeSlug(projectName || 'project')
+    const safeFileName = toStorageSafeFileName(media.fileName || `${Date.now()}.jpg`)
+    const path = `tasks/${safeProject}/${Date.now()}-${safeFileName}`
 
-  const { error } = await supabase.storage
-    .from('task-photos')
-    .upload(path, bytes, {
+    const { error } = await supabase.storage.from('task-photos').upload(path, bytes, {
       contentType: media.mimeType,
-      upsert: true,
+      upsert: false,
     })
 
-  if (error) throw new Error(error.message)
+    if (error) throw new Error(error.message)
 
-  const { data: publicData } = supabase.storage.from('task-photos').getPublicUrl(path)
-  return publicData?.publicUrl || null
+    const { data: publicData } = supabase.storage.from('task-photos').getPublicUrl(path)
+    return publicData?.publicUrl || null
+  } catch (e) {
+    console.error('PHOTO UPLOAD ERROR (IGNORE WEBHOOK):', e)
+    return null
+  }
 }
 
 async function addProblemHistory(
@@ -551,6 +575,7 @@ async function closeExistingTaskIfDone(
     stage: string
     material: string
     reason: string
+    taskKey: string
     incomingText: string
     senderName: string
     senderPhone: string
@@ -577,13 +602,16 @@ async function closeExistingTaskIfDone(
   const materialKey = `Материал: ${params.material}`
   const reasonKey = `Причина: ${params.reason}`
 
-  const candidate = (candidates || []).find((task: any) => {
-    const summary = String(task.ai_summary || '')
-    const sameStage = params.stage !== 'прочее' && summary.includes(stageKey)
-    const sameMaterial = params.material !== 'не указан' && summary.includes(materialKey)
-    const sameReason = params.reason !== 'прочее' && summary.includes(reasonKey)
-    return sameStage || sameMaterial || sameReason
-  })
+  const list = candidates || []
+  const byKeyIncludes = (key: string) =>
+    list.find((task: any) => String(task.ai_summary || '').includes(key))
+
+  // Приоритет закрытия: material > reason > stage.
+  const candidate =
+    (params.material !== 'не указан' ? byKeyIncludes(materialKey) : null) ||
+    (params.reason !== 'прочее' ? byKeyIncludes(reasonKey) : null) ||
+    (params.stage !== 'прочее' ? byKeyIncludes(stageKey) : null) ||
+    null
 
   if (!candidate) return null
 
@@ -592,7 +620,7 @@ async function closeExistingTaskIfDone(
     .update({
       status: 'closed',
       color_indicator: 'green',
-      ai_summary: `Проблема закрыта по сообщению WhatsApp: ${params.incomingText}`,
+      ai_summary: `Проблема закрыта по сообщению WhatsApp: ${params.incomingText}. KEY:${params.taskKey}`,
       updated_at: new Date().toISOString(),
       sender_name: params.senderName,
       sender_phone: params.senderPhone || null,
@@ -607,6 +635,15 @@ async function closeExistingTaskIfDone(
   }
 
   return closedTask
+}
+
+function daysSince(iso: string | null | undefined) {
+  if (!iso) return null
+  const start = new Date(iso).getTime()
+  if (!Number.isFinite(start)) return null
+  const diff = Date.now() - start
+  if (!Number.isFinite(diff) || diff < 0) return 0
+  return Math.floor(diff / (24 * 60 * 60 * 1000))
 }
 
 async function updateExistingTaskIfDuplicate(
@@ -650,7 +687,13 @@ async function updateExistingTaskIfDuplicate(
     ? 'red'
     : params.parsed.color
 
-  const nextSummary = `${params.parsed.summary}. Объект: ${params.projectName}. Этап: ${params.stage}. Причина: ${params.reason}. Материал: ${params.material}. KEY:${params.taskKey} | Обновлено из WhatsApp`
+  const durationDays = daysSince(existingTask.created_at)
+  const durationText = durationDays === null ? '' : ` Длится: ${durationDays} дн.`
+
+  const nextSummary =
+    `${params.parsed.summary}.${durationText} ` +
+    `Объект: ${params.projectName}. Этап: ${params.stage}. Причина: ${params.reason}. Материал: ${params.material}. ` +
+    `KEY:${params.taskKey} | Обновлено из WhatsApp`
 
   const { data: updatedTask, error: updateError } = await supabase
     .from('tasks')
@@ -671,6 +714,22 @@ async function updateExistingTaskIfDuplicate(
   }
 
   return updatedTask
+}
+
+function toUiTask(task: any) {
+  if (!task) return null
+  return {
+    project_name: task.project_name ?? null,
+    color_indicator: task.color_indicator ?? null,
+    ai_summary: task.ai_summary ?? null,
+    photo_url: task.photo_url ?? null,
+    sender_name: task.sender_name ?? null,
+    sender_phone: task.sender_phone ?? null,
+    status: task.status ?? null,
+    company_id: task.company_id ?? null,
+    project_id: task.project_id ?? null,
+    employee_id: task.employee_id ?? null,
+  }
 }
 
 async function syncProblemsIfPossible(
@@ -969,12 +1028,13 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      if (parsed.kind === 'done' || parsed.color === 'green') {
+      if (parsed.kind === 'done' || parsed.color === 'green' || isClosingByText(title)) {
         const closedTask = await closeExistingTaskIfDone(supabase, {
           projectName,
           stage,
           material,
           reason,
+          taskKey,
           incomingText: title,
           senderName,
           senderPhone,
@@ -997,7 +1057,7 @@ export async function POST(req: NextRequest) {
             photoUrl,
           })
 
-          return NextResponse.json({ ok: true, closed: true, task: closedTask })
+          return NextResponse.json({ ok: true, closed: true, task: toUiTask(closedTask) })
         }
       }
 
@@ -1030,12 +1090,13 @@ export async function POST(req: NextRequest) {
           photoUrl,
         })
 
-        return NextResponse.json({ ok: true, updated: true, task: existingTask })
+        return NextResponse.json({ ok: true, updated: true, task: toUiTask(existingTask) })
       }
     } catch (dedupeError) {
       console.error('DEDUPE/CLOSE ERROR, FALLBACK TO INSERT:', dedupeError)
     }
 
+    // Важно: очистка демо-базы выполняется вручную SQL, не из webhook.
     const aiSummary = `${parsed.summary}. Объект: ${projectName}. Этап: ${stage}. Причина: ${reason}. Материал: ${material}. KEY:${taskKey}`
 
     const taskPayload: Record<string, any> = {
@@ -1084,7 +1145,7 @@ export async function POST(req: NextRequest) {
       console.error('PROBLEMS SYNC ERROR, TASK ALREADY SAVED:', problemsError)
     }
 
-    return NextResponse.json({ ok: true, inserted: insertedTask })
+    return NextResponse.json({ ok: true, inserted: toUiTask(insertedTask) })
   } catch (e: any) {
     console.error('WHATSAPP ROUTE ERROR:', e)
     return NextResponse.json({ ok: false, error: e?.message || 'route failed' }, { status: 200 })
