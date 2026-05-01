@@ -72,6 +72,7 @@ type ProblemMedia = {
   comment: string | null
   photo_url: string
   created_at: string
+  company_id?: string | null
 }
 
 type ProblemFilter = 'all' | 'red' | 'yellow'
@@ -223,10 +224,11 @@ export default function Page() {
   async function fetchMedia() {
     let query = supabase
       .from('problem_media')
-      .select('id, task_id, problem_id, project_id, project_name, problem_title, sender_name, comment, photo_url, created_at')
+      .select('id, photo_url, problem_title, project_name, sender_name, created_at, company_id')
       .eq('company_id', companyId)
+      .not('photo_url', 'is', null)
       .order('created_at', { ascending: false })
-      .limit(300)
+      .limit(20)
 
     const { data, error } = await query
     if (error) throw error
