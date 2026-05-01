@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type Severity = 'green' | 'yellow' | 'red' | null
@@ -156,6 +156,10 @@ export default function Page() {
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
   const [uiToast, setUiToast] = useState<string | null>(null)
+  const [issuesViewMode, setIssuesViewMode] = useState<'list' | 'by_project'>('list')
+  const [stageFilter, setStageFilter] = useState<string>('all')
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
+  const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
 
   async function fetchTasks() {
     let query = supabase
@@ -250,12 +254,35 @@ export default function Page() {
     }
   }, [urlReady, companyId])
 
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('issues_view_mode')
+      if (saved === 'list' || saved === 'by_project') setIssuesViewMode(saved)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('issues_view_mode', issuesViewMode)
+    } catch {
+      // ignore
+    }
+  }, [issuesViewMode])
+
   const activeProblemsBase = useMemo(() => {
     return problems
       .filter((p) => p.status === 'open' && p.is_active !== false)
       .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
       .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
   }, [problems, selectedProject, dateFrom, dateTo])
+
+  const stageOptions = useMemo(() => {
+    const set = new Set<string>()
+    activeProblemsBase.forEach((p) => set.add((p.stage || 'Без этапа').trim() || 'Без этапа'))
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
+  }, [activeProblemsBase])
 
   const closedProblems = useMemo(() => {
     return problems
@@ -266,7 +293,9 @@ export default function Page() {
   }, [problems, selectedProject, dateFrom, dateTo])
 
   const filteredProblems = useMemo(() => {
-    const result = activeProblemsBase.filter((p) => {
+    const result = activeProblemsBase
+      .filter((p) => stageFilter === 'all' || (p.stage || 'Без этапа') === stageFilter)
+      .filter((p) => {
       if (problemFilter === 'red') return p.severity === 'red'
       if (problemFilter === 'yellow') return p.severity === 'yellow'
       return true
@@ -275,9 +304,92 @@ export default function Page() {
     return [...result].sort((a, b) => {
       const bySeverity = (severityOrder[a.severity || 'green'] || 99) - (severityOrder[b.severity || 'green'] || 99)
       if (bySeverity !== 0) return bySeverity
-      return new Date(b.last_seen_at || 0).getTime() - new Date(a.last_seen_at || 0).getTime()
+      return Number(b.days_count || 0) - Number(a.days_count || 0)
     })
-  }, [activeProblemsBase, problemFilter])
+  }, [activeProblemsBase, problemFilter, stageFilter])
+
+  const groupedIssues = useMemo(() => {
+    const byProject: Record<string, Problem[]> = {}
+    filteredProblems.forEach((p) => {
+      const project = (p.project_name || 'Без объекта').trim() || 'Без объекта'
+      byProject[project] = byProject[project] || []
+      byProject[project].push(p)
+    })
+
+    const projectsList = Object.entries(byProject).map(([projectName, items]) => {
+      const red = items.filter((i) => i.severity === 'red').length
+      const yellow = items.filter((i) => i.severity === 'yellow').length
+      const maxDuration = Math.max(...items.map((i) => Number(i.days_count || 0)), 0)
+
+      const byStage: Record<string, Problem[]> = {}
+      items.forEach((p) => {
+        const stage = (p.stage || 'Без этапа').trim() || 'Без этапа'
+        byStage[stage] = byStage[stage] || []
+        byStage[stage].push(p)
+      })
+
+      const stages = Object.entries(byStage).map(([stageName, stageItems]) => {
+        const r = stageItems.filter((i) => i.severity === 'red').length
+        const y = stageItems.filter((i) => i.severity === 'yellow').length
+        const max = Math.max(...stageItems.map((i) => Number(i.days_count || 0)), 0)
+
+        const sortedTasks = [...stageItems].sort((a, b) => {
+          const bySeverity = (severityOrder[a.severity || 'green'] || 99) - (severityOrder[b.severity || 'green'] || 99)
+          if (bySeverity !== 0) return bySeverity
+          return Number(b.days_count || 0) - Number(a.days_count || 0)
+        })
+
+        return { stageName, red: r, yellow: y, maxDuration: max, tasks: sortedTasks }
+      }).sort((a, b) => b.maxDuration - a.maxDuration)
+
+      return { projectName, red, yellow, maxDuration, stages }
+    }).sort((a, b) => b.maxDuration - a.maxDuration)
+
+    return projectsList
+  }, [filteredProblems])
+
+  useEffect(() => {
+    // Stage filter behavior in "By projects" mode:
+    // - hide empty projects is automatic via filteredProblems
+    // - auto-expand matching stage (and its project) when filter is set
+    // - reset collapse when cleared
+    if (issuesViewMode !== 'by_project') return
+
+    if (stageFilter === 'all') {
+      setExpandedProjects({})
+      setExpandedStages({})
+      return
+    }
+
+    const nextProjects: Record<string, boolean> = {}
+    const nextStages: Record<string, boolean> = {}
+    groupedIssues.forEach((proj) => {
+      const hasStage = proj.stages.some((s) => s.stageName === stageFilter)
+      if (!hasStage) return
+      nextProjects[proj.projectName] = true
+      nextStages[`${proj.projectName}__${stageFilter}`] = true
+    })
+    setExpandedProjects(nextProjects)
+    setExpandedStages(nextStages)
+  }, [stageFilter, issuesViewMode, groupedIssues])
+
+  function expandAllToStages() {
+    const nextP: Record<string, boolean> = {}
+    const nextS: Record<string, boolean> = {}
+    groupedIssues.forEach((proj) => {
+      nextP[proj.projectName] = true
+      proj.stages.forEach((s) => {
+        nextS[`${proj.projectName}__${s.stageName}`] = true
+      })
+    })
+    setExpandedProjects(nextP)
+    setExpandedStages(nextS)
+  }
+
+  function collapseAll() {
+    setExpandedProjects({})
+    setExpandedStages({})
+  }
 
   const projectFilteredTasks = useMemo(() => {
     return tasks
@@ -616,6 +728,22 @@ export default function Page() {
           <KpiCard label="Требует внимания" value={attentionCount} color="#f97316" onClick={scrollToActiveIssues} />
         </section>
 
+        {/* Отчет директору / Сводка по объекту */}
+        <CollapsibleSection
+          title="Отчёт директору"
+          storageKey="report_expanded"
+          defaultExpanded={true}
+          headerActions={(
+            <>
+              <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать'}</button>
+              <button style={primaryButton} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
+            </>
+          )}
+        >
+          <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
+          <pre style={reportBox}>{reportText}</pre>
+        </CollapsibleSection>
+
         {/* Alert */}
         <section style={panel}>
           <div style={sectionTitle}>Alert</div>
@@ -636,110 +764,223 @@ export default function Page() {
           )}
         </section>
 
-        {/* Issues + Events */}
-        <section style={mainGrid}>
-          <div style={panel} id="active-issues">
+        {/* Активные проблемы */}
+        <section style={panel} id="active-issues">
             <div style={panelHeader}>
               <div>
                 <div style={sectionTitle}>Активные проблемы</div>
                 <div style={sectionSubTitle}>Здесь директор видит реальные открытые проблемы с этапом, материалом, причиной и ответственным</div>
               </div>
               <div style={actionRow}>
+                <select style={projectSelect} value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
+                  <option value="all">Этап: все</option>
+                  {stageOptions.map((stage) => (
+                    <option key={stage} value={stage}>Этап: {stage}</option>
+                  ))}
+                </select>
                 <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('all')}>Все</button>
                 <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('red')}>Проблемы</button>
                 <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('yellow')}>Риски</button>
               </div>
             </div>
 
+            <div style={{ ...actionRow, justifyContent: 'flex-end', marginBottom: 12 }}>
+              <div style={toggleGroup}>
+                <button
+                  style={issuesViewMode === 'list' ? toggleActive : toggleButton}
+                  onClick={() => setIssuesViewMode('list')}
+                >
+                  Список ({filteredProblems.length})
+                </button>
+                <button
+                  style={issuesViewMode === 'by_project' ? toggleActive : toggleButton}
+                  onClick={() => setIssuesViewMode('by_project')}
+                >
+                  По объектам ({groupedIssues.length} объектов)
+                </button>
+              </div>
+              {issuesViewMode === 'by_project' ? (
+                <>
+                  <button style={secondaryButton} onClick={expandAllToStages}>Развернуть всё</button>
+                  <button style={secondaryButton} onClick={collapseAll}>Свернуть всё</button>
+                </>
+              ) : null}
+            </div>
+
             <div style={tableWrap}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th style={cellHeader}>Проблема</th>
-                    <th style={cellHeader}>Этап</th>
-                    <th style={cellHeader}>Материал</th>
-                    <th style={cellHeader}>Причина</th>
-                    <th style={cellHeader}>Ответственный</th>
-                    <th style={cellHeader}>Статус</th>
-                    <th style={cellHeader}>Длится</th>
-                    <th style={cellHeader}>Фото</th>
-                    <th style={cellHeader}>История</th>
-                    <th style={cellHeader}>Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProblems.length === 0 ? (
-                    <tr><td style={emptyCell} colSpan={10}>{emptyText(problemFilter)}</td></tr>
-                  ) : filteredProblems.map((problem) => (
-                    <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
-                      <td style={cellStrong}>
-                        <div>{problem.title}</div>
-                        <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                        <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
-                      </td>
-                      <td style={cell}>{problem.stage || 'прочее'}</td>
-                      <td style={cell}>{problem.material || 'не указан'}</td>
-                      <td style={cell}>{problem.reason || 'прочее'}</td>
-                      <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
-                      <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                      <td style={cell}>{problem.days_count || 1} дн.</td>
-                      <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
-                      <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
-                      <td style={cell}>
-                        <div style={actionsCol}>
-                          <button style={actionChip} onClick={() => showToast('UI: Взято на контроль')}>Взять на контроль</button>
-                          <button style={actionChip} onClick={() => showToast('UI: Запрос отправлен')}>Запросить обновление</button>
-                          <button
-                            style={actionChipDanger}
-                            onClick={() => showToast('UI: Закрытие (без backend)')}
-                            disabled={closingId === problem.id}
-                          >
-                            Закрыть
-                          </button>
-                        </div>
-                      </td>
+              {issuesViewMode === 'list' ? (
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={cellHeader}>Проблема</th>
+                      <th style={cellHeader}>Этап</th>
+                      <th style={cellHeader}>Материал</th>
+                      <th style={cellHeader}>Причина</th>
+                      <th style={cellHeader}>Ответственный</th>
+                      <th style={cellHeader}>Статус</th>
+                      <th style={cellHeader}>Длится</th>
+                      <th style={cellHeader}>Фото</th>
+                      <th style={cellHeader}>История</th>
+                      <th style={cellHeader}>Действия</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredProblems.length === 0 ? (
+                      <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
+                    ) : filteredProblems.map((problem) => (
+                      <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                        <td style={cellStrong}>
+                          <div>{problem.title}</div>
+                          <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
+                          <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                        </td>
+                        <td style={cell}>{problem.stage || 'Без этапа'}</td>
+                        <td style={cell}>{problem.material || 'не указан'}</td>
+                        <td style={cell}>{problem.reason || 'прочее'}</td>
+                        <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
+                        <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
+                        <td style={cell}>{problem.days_count || 1} дн.</td>
+                        <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
+                        <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
+                        <td style={cell}>
+                          <div style={actionsCol}>
+                            <button style={actionChip} onClick={() => showToast('UI: Взято на контроль')}>Взять на контроль</button>
+                            <button style={actionChip} onClick={() => showToast('UI: Запрос отправлен')}>Запросить обновление</button>
+                            <button
+                              style={actionChipDanger}
+                              onClick={() => showToast('UI: Закрытие (без backend)')}
+                              disabled={closingId === problem.id}
+                            >
+                              Закрыть
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                groupedIssues.length === 0 ? (
+                  <div style={emptyBox}>Нет задач для группировки</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {groupedIssues.map((proj) => {
+                      const projOpen = Boolean(expandedProjects[proj.projectName])
+                      return (
+                        <div key={proj.projectName} style={groupCard}>
+                          <button
+                            style={groupHeaderButton}
+                            onClick={() => setExpandedProjects((cur) => ({ ...cur, [proj.projectName]: !projOpen }))}
+                          >
+                            <div>
+                              <div style={listTitle}>{proj.projectName}</div>
+                              <div style={metaLine}>max duration: {proj.maxDuration} дн.</div>
+                            </div>
+                            <div style={badgeRow}>
+                              <span style={countBadgeRed}>Проблема ×{proj.red}</span>
+                              <span style={countBadgeYellow}>Риск ×{proj.yellow}</span>
+                            </div>
+                          </button>
+
+                          {projOpen ? (
+                            <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                              {proj.stages.map((st) => {
+                                const stageKey = `${proj.projectName}__${st.stageName}`
+                                const stageOpen = Boolean(expandedStages[stageKey])
+                                return (
+                                  <div key={stageKey} style={stageCard}>
+                                    <button
+                                      style={groupHeaderButton}
+                                      onClick={() => setExpandedStages((cur) => ({ ...cur, [stageKey]: !stageOpen }))}
+                                    >
+                                      <div>
+                                        <div style={listTitle}>{st.stageName}</div>
+                                        <div style={metaLine}>max duration: {st.maxDuration} дн.</div>
+                                      </div>
+                                      <div style={badgeRow}>
+                                        <span style={countBadgeRed}>Проблема ×{st.red}</span>
+                                        <span style={countBadgeYellow}>Риск ×{st.yellow}</span>
+                                      </div>
+                                    </button>
+
+                                    {stageOpen ? (
+                                      <div style={{ marginTop: 10, overflowX: 'auto' }}>
+                                        <table style={tableStyle}>
+                                          <thead>
+                                            <tr>
+                                              <th style={cellHeader}>Проблема</th>
+                                              <th style={cellHeader}>Ответственный</th>
+                                              <th style={cellHeader}>Статус</th>
+                                              <th style={cellHeader}>Длится</th>
+                                              <th style={cellHeader}>Фото</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {st.tasks.map((problem) => (
+                                              <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                                                <td style={cellStrong}>
+                                                  <div>{problem.title}</div>
+                                                  <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                                                </td>
+                                                <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
+                                                <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
+                                                <td style={cell}>{problem.days_count || 1} дн.</td>
+                                                <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              )}
+            </div>
+        </section>
+
+        {/* Последние события */}
+        <section style={sidePanel}>
+          <div style={panelHeader}>
+            <div>
+              <div style={sectionTitle}>Последние события</div>
+              <div style={sectionSubTitle}>10 последних событий. Можно отфильтровать и показать все</div>
+            </div>
+            <div style={actionRow}>
+              <button style={eventsFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('all')}>Все</button>
+              <button style={eventsFilter === 'problems' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('problems')}>Проблемы</button>
+              <button style={eventsFilter === 'photo' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('photo')}>Фото</button>
+              <button style={eventsFilter === 'statuses' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('statuses')}>Статусы</button>
             </div>
           </div>
 
-          <div style={sidePanel}>
-            <div style={panelHeader}>
-              <div>
-                <div style={sectionTitle}>Последние события</div>
-                <div style={sectionSubTitle}>10 последних событий. Можно отфильтровать и показать все</div>
+          {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
+            <button
+              key={event.id}
+              style={eventButton}
+              onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
+            >
+              <div style={eventTopRow}>
+                <div style={listTitleSmall}>{event.title}</div>
+                <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
               </div>
-              <div style={actionRow}>
-                <button style={eventsFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('all')}>Все</button>
-                <button style={eventsFilter === 'problems' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('problems')}>Проблемы</button>
-                <button style={eventsFilter === 'photo' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('photo')}>Фото</button>
-                <button style={eventsFilter === 'statuses' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('statuses')}>Статусы</button>
-              </div>
-            </div>
+              <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
+              {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
+              {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
+            </button>
+          ))}
 
-            {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
-              <button
-                key={event.id}
-                style={eventButton}
-                onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
-              >
-                <div style={eventTopRow}>
-                  <div style={listTitleSmall}>{event.title}</div>
-                  <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
-                </div>
-                <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
-                {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
-                {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
-              </button>
-            ))}
-
-            <div style={{ marginTop: 12 }}>
-              <button style={secondaryButton} onClick={() => setEventsShowAll((v) => !v)}>
-                {eventsShowAll ? 'Свернуть' : 'Показать все'}
-              </button>
-            </div>
+          <div style={{ marginTop: 12 }}>
+            <button style={secondaryButton} onClick={() => setEventsShowAll((v) => !v)}>
+              {eventsShowAll ? 'Свернуть' : 'Показать все'}
+            </button>
           </div>
         </section>
 
@@ -763,34 +1004,26 @@ export default function Page() {
         </section>
 
         {/* Analytics */}
-        <section style={panel}>
-          <div style={panelHeader}>
-            <div>
-              <div style={sectionTitle}>Отчет директору</div>
-              <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
-            </div>
-            <div style={actionRow}>
-              <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать отчет'}</button>
-              <button style={primaryButton} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
-            </div>
-          </div>
-          <pre style={reportBox}>{reportText}</pre>
-        </section>
-
         <section style={grid4}>
           <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
           <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
           <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
           <div style={panel}>
-            <div style={sectionTitle}>Подсказка</div>
-            <div style={sectionSubTitle}>Клик по KPI/Alert/Events — скролл к Active Issues</div>
-            <div style={emptyBox}>Действия в Issues сейчас UI-only (как в пилоте).</div>
+            <div style={sectionTitle}>Аналитика</div>
+            <div style={sectionSubTitle}>Короткий обзор по выбранному периоду</div>
+            <div style={summaryRow}><span>Проблемы</span><strong>{redCount}</strong></div>
+            <div style={summaryRow}><span>Риски</span><strong>{yellowCount}</strong></div>
+            <div style={summaryRow}><span>Требует внимания</span><strong>{attentionCount}</strong></div>
           </div>
         </section>
 
         {/* Archive */}
-        <section style={panel}>
-          <div style={sectionTitle}>Закрытые проблемы</div>
+        <CollapsibleSection
+          title="Закрытые проблемы"
+          count={closedProblems.length}
+          storageKey="closed_issues_expanded"
+          defaultExpanded={true}
+        >
           <div style={sectionSubTitle}>История вручную и автоматически закрытых проблем</div>
           <div style={tableWrap}>
             <table style={tableStyle}>
@@ -825,15 +1058,15 @@ export default function Page() {
               </tbody>
             </table>
           </div>
-        </section>
+        </CollapsibleSection>
 
-        <section style={panel}>
-          <div style={panelHeader}>
-            <div>
-              <div style={sectionTitle}>История проблем</div>
-              <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
-            </div>
-            <div style={actionRow}>
+        <CollapsibleSection
+          title="История проблем"
+          count={filteredHistory.length}
+          storageKey="history_expanded"
+          defaultExpanded={false}
+          headerActions={(
+            <>
               <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
                 <option value="all">Все проблемы</option>
                 {problems.map((problem) => (
@@ -841,8 +1074,10 @@ export default function Page() {
                 ))}
               </select>
               {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
-            </div>
-          </div>
+            </>
+          )}
+        >
+          <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
           {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
             <div style={listWrap}>{filteredHistory.map((item) => (
               <div key={item.id} style={listItem}>
@@ -853,11 +1088,15 @@ export default function Page() {
               </div>
             ))}</div>
           )}
-        </section>
+        </CollapsibleSection>
 
-        <section style={panel}>
-          <div style={sectionTitle}>Сырые задачи / лента WhatsApp</div>
-          <div style={sectionSubTitle}>Первичный поток сообщений. Управленческий смысл теперь в проблемах, этапах, причинах, объектах и сотрудниках.</div>
+        <CollapsibleSection
+          title="Сырые задачи / лента WhatsApp"
+          count={projectFilteredTasks.slice(0, 80).length}
+          storageKey="raw_tasks_expanded"
+          defaultExpanded={false}
+        >
+          <div style={sectionSubTitle}>Первичный поток сообщений. Управленческий смысл теперь в проблемах, этапах, причинах и сотрудниках.</div>
           <div style={tableWrap}>
             <table style={tableStyle}>
               <thead>
@@ -886,7 +1125,7 @@ export default function Page() {
               </tbody>
             </table>
           </div>
-        </section>
+        </CollapsibleSection>
       </div>
 
       {uiToast ? (
@@ -930,6 +1169,66 @@ function KpiCard({ label, value, color, onClick }: { label: string; value: numbe
       <div style={kpiLabel}><span style={{ ...dot, background: color }} />{label}</div>
       <div style={kpiValue}>{value}</div>
     </button>
+  )
+}
+
+function CollapsibleSection({
+  title,
+  count,
+  storageKey,
+  defaultExpanded,
+  headerActions,
+  children,
+}: {
+  title: string
+  count?: number
+  storageKey: string
+  defaultExpanded: boolean
+  headerActions?: ReactNode
+  children: ReactNode
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey)
+      if (saved === null) {
+        setExpanded(defaultExpanded)
+      } else {
+        setExpanded(saved === '1')
+      }
+    } catch {
+      setExpanded(defaultExpanded)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, expanded ? '1' : '0')
+    } catch {
+      // ignore
+    }
+  }, [expanded, storageKey])
+
+  return (
+    <section style={panel}>
+      <div style={panelHeader}>
+        <div>
+          <div style={sectionTitle}>
+            {title}
+            {typeof count === 'number' ? <span style={sectionCount}> · {count}</span> : null}
+          </div>
+        </div>
+        <div style={actionRow}>
+          {headerActions}
+          <button style={secondaryButton} onClick={() => setExpanded((v) => !v)}>
+            {expanded ? 'Свернуть' : 'Развернуть'}
+          </button>
+        </div>
+      </div>
+      {expanded ? children : null}
+    </section>
   )
 }
 
@@ -979,6 +1278,7 @@ const sidePanel: CSSProperties = { ...panel, alignSelf: 'start' }
 const panelHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14 }
 const sectionTitle: CSSProperties = { fontSize: 22, fontWeight: 800, marginBottom: 6 }
 const sectionSubTitle: CSSProperties = { fontSize: 13, color: '#64748b' }
+const sectionCount: CSSProperties = { fontSize: 14, color: '#64748b', fontWeight: 800 }
 const actionRow: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const primaryButton: CSSProperties = { background: '#0f172a', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 14px', fontWeight: 700, cursor: 'pointer' }
 const secondaryButton: CSSProperties = { background: '#fff', color: '#0f172a', border: '1px solid #cbd5e1', borderRadius: 10, padding: '9px 12px', fontWeight: 700, cursor: 'pointer' }
@@ -1029,6 +1329,15 @@ const actionChipDanger: CSSProperties = { ...actionChip, border: '1px solid #fec
 const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
 const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
 const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
+const toggleGroup: CSSProperties = { display: 'inline-flex', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 12, padding: 3, gap: 3 }
+const toggleButton: CSSProperties = { background: 'transparent', border: 'none', borderRadius: 10, padding: '8px 10px', fontWeight: 900, cursor: 'pointer', color: '#334155' }
+const toggleActive: CSSProperties = { ...toggleButton, background: '#0f172a', color: '#fff' }
+const groupCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 16, padding: 12, background: '#fff' }
+const stageCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, padding: 10, background: '#f8fafc' }
+const groupHeaderButton: CSSProperties = { width: '100%', textAlign: 'left' as const, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }
+const badgeRow: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }
+const countBadgeRed: CSSProperties = { ...smallPill, background: '#fee2e2', color: '#991b1b' }
+const countBadgeYellow: CSSProperties = { ...smallPill, background: '#fef3c7', color: '#92400e' }
 
 function eventLabel(type: EventsFilter) {
   if (type === 'problems') return 'Проблемы'
