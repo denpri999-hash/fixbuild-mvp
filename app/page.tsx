@@ -209,16 +209,42 @@ export default function Page() {
   }
 
   async function fetchHistory() {
-    let query = supabase
-      .from('problem_history')
-      .select('id, problem_id, event, project_name, problem_title, comment, created_at')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .limit(500)
+    if (!companyId) return
 
-    const { data, error } = await query
-    if (error) throw error
-    setHistory((data || []) as ProblemHistory[])
+    try {
+      const { data: historyData, error } = await supabase
+        .from('problem_history')
+        .select('id, action, comment, created_at, problem_id, project_name, company_id')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      if (error) throw error
+
+      const normalized = (historyData || []).map((row: any) => ({
+        id: row.id,
+        problem_id: row.problem_id ?? null,
+        event: String(row.action || ''),
+        project_name: row.project_name ?? null,
+        problem_title: null,
+        comment: row.comment ?? null,
+        created_at: row.created_at,
+      }))
+
+      setHistory(normalized as ProblemHistory[])
+      return
+    } catch (e) {
+      // Fallback for legacy schema (event/problem_title). Keeps dashboard functional if DB hasn't been migrated.
+      const { data, error } = await supabase
+        .from('problem_history')
+        .select('id, problem_id, event, project_name, problem_title, comment, created_at')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      if (error) throw error
+      setHistory((data || []) as ProblemHistory[])
+    }
   }
 
   async function fetchMedia() {
@@ -226,45 +252,14 @@ export default function Page() {
 
     const { data: photoArchiveData, error: photoError } = await supabase
       .from('problem_media')
-      .select('id, photo_url, problem_title, project_name, sender_name, comment, created_at')
+      .select('id, photo_url, problem_title, project_name, sender_name, created_at')
       .eq('company_id', companyId)
       .not('photo_url', 'is', null)
       .order('created_at', { ascending: false })
       .limit(20)
 
     if (photoError) throw photoError
-    const primary = (photoArchiveData || []) as ProblemMedia[]
-    if (primary.length > 0) {
-      setMedia(primary)
-      return
-    }
-
-    // Fallback: старые записи могли быть без company_id; берём только media,
-    // которые привязаны к проблемам текущей компании (tenant isolation сохраняется).
-    const { data: companyProblems, error: problemsError } = await supabase
-      .from('problems')
-      .select('id')
-      .eq('company_id', companyId)
-      .limit(500)
-
-    if (problemsError) throw problemsError
-
-    const ids = (companyProblems || []).map((p: any) => p.id).filter(Boolean)
-    if (ids.length === 0) {
-      setMedia([])
-      return
-    }
-
-    const { data: fallbackMedia, error: fallbackError } = await supabase
-      .from('problem_media')
-      .select('id, photo_url, problem_title, project_name, sender_name, comment, created_at')
-      .in('problem_id', ids)
-      .not('photo_url', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(20)
-
-    if (fallbackError) throw fallbackError
-    setMedia(((fallbackMedia || []) as ProblemMedia[]))
+    setMedia(((photoArchiveData || []) as ProblemMedia[]))
   }
 
   async function fetchAll() {
