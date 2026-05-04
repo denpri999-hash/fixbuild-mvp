@@ -193,7 +193,7 @@ export default function Page() {
   const [selectedProblemForHistory, setSelectedProblemForHistory] = useState<string>('all')
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
   const [highlightedIssueId, setHighlightedIssueId] = useState<string | null>(null)
-  const [watchedProblems, setWatchedProblems] = useState<string[]>([])
+  const [deadlines, setDeadlines] = useState<Record<string, string>>({})
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
   const [uiToast, setUiToast] = useState<string | null>(null)
@@ -217,7 +217,6 @@ export default function Page() {
   const [uiMounted, setUiMounted] = useState(false)
   const [hoverKey, setHoverKey] = useState<string | null>(null)
   const [removingProblemIds, setRemovingProblemIds] = useState<Record<string, boolean>>({})
-  const [closePressedId, setClosePressedId] = useState<string | null>(null)
   const [deadlineEditingId, setDeadlineEditingId] = useState<string | null>(null)
   const [deadlineDraft, setDeadlineDraft] = useState<string>('')
   const [updateModal, setUpdateModal] = useState<{ title: string; text: string } | null>(null)
@@ -246,13 +245,19 @@ export default function Page() {
   async function fetchProblems() {
     let query = supabase
       .from('problems')
-      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key, deadline')
+      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key, deadline, watched')
       .eq('company_id', companyId)
       .order('last_seen_at', { ascending: false })
 
     const { data, error } = await query
     if (error) throw error
-    setProblems((data || []) as Problem[])
+    const rows = (data || []) as Problem[]
+    setProblems(rows)
+    const loadedDeadlines: Record<string, string> = {}
+    rows.forEach((p) => {
+      if (p.deadline) loadedDeadlines[p.id] = problemDeadlineDay(p)
+    })
+    setDeadlines(loadedDeadlines)
   }
 
   async function fetchProjects() {
@@ -621,6 +626,8 @@ export default function Page() {
       return Number(b.days_count || 0) - Number(a.days_count || 0)
     })
   }, [activeProblemsBase, problemFilter, stageFilter])
+
+  const deadlineDayForUi = (p: Problem) => deadlines[p.id] || problemDeadlineDay(p)
 
   const groupedIssues = useMemo(() => {
     const byProject: Record<string, Problem[]> = {}
@@ -1113,9 +1120,17 @@ export default function Page() {
       .eq('id', problemId)
       .eq('company_id', companyId)
 
-    if (!error) {
-      setProblems((prev) => prev.filter((p) => p.id !== problemId))
+    if (error) {
+      console.error('close problem:', error)
+      showToast('Не удалось закрыть задачу')
+      return
     }
+    setProblems((prev) => prev.filter((p) => p.id !== problemId))
+    setDeadlines((prev) => {
+      const next = { ...prev }
+      delete next[problemId]
+      return next
+    })
   }
 
   const reopenProblem = async (problemId: string) => {
@@ -1138,12 +1153,22 @@ export default function Page() {
     }
   }
 
-  const toggleWatch = (problemId: string) => {
-    console.log('[toggleWatch] click', { problemId })
-    setWatchedProblems((prev) => {
-      const isWatched = prev.includes(problemId)
-      return isWatched ? prev.filter((id) => id !== problemId) : [...prev, problemId]
-    })
+  const toggleWatch = async (problemId: string) => {
+    if (!companyId) return
+    const problem = problems.find((x) => x.id === problemId)
+    if (!problem) return
+    const newWatched = !(problem.watched === true)
+    const { error } = await supabase
+      .from('problems')
+      .update({ watched: newWatched })
+      .eq('id', problemId)
+      .eq('company_id', companyId)
+    if (error) {
+      console.error('watch update:', error)
+      showToast('Не удалось обновить контроль')
+      return
+    }
+    setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: newWatched } : p)))
   }
 
   function formatDeadlineLabel(value: string) {
@@ -1169,7 +1194,7 @@ export default function Page() {
   function openDeadline(problemId: string) {
     const p = problems.find((x) => x.id === problemId)
     setDeadlineEditingId(problemId)
-    setDeadlineDraft(problemDeadlineDay(p))
+    setDeadlineDraft(deadlines[problemId] || problemDeadlineDay(p))
   }
 
   async function saveDeadline(problem: Problem) {
@@ -1192,6 +1217,7 @@ export default function Page() {
     }
 
     setProblems((prev) => prev.map((p) => (p.id === problem.id ? { ...p, deadline: date } : p)))
+    setDeadlines((prev) => ({ ...prev, [problem.id]: date }))
     setDeadlineEditingId(null)
 
     const rp = (problem.responsible_person || '').trim()
@@ -1232,6 +1258,11 @@ export default function Page() {
     }
 
     setProblems((prev) => prev.map((p) => (p.id === problem.id ? { ...p, deadline: null } : p)))
+    setDeadlines((prev) => {
+      const next = { ...prev }
+      delete next[problem.id]
+      return next
+    })
 
     const rp = (problem.responsible_person || '').trim()
     const employee = rp ? employees.find((e) => (e.name || '').trim() === rp) : undefined
@@ -1294,10 +1325,16 @@ export default function Page() {
   }
 
   function requestClose(problemId: string) {
-    setClosePressedId(problemId)
-    window.setTimeout(() => setClosePressedId((cur) => (cur === problemId ? null : cur)), 140)
     setRemovingProblemIds((cur) => ({ ...cur, [problemId]: true }))
-    window.setTimeout(() => closeProblem(problemId), 280)
+    window.setTimeout(() => {
+      void closeProblem(problemId).finally(() => {
+        setRemovingProblemIds((cur) => {
+          const next = { ...cur }
+          delete next[problemId]
+          return next
+        })
+      })
+    }, 280)
   }
 
   const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
@@ -1607,14 +1644,14 @@ export default function Page() {
             </div>
 
             <div style={tableWrap}>
-              {issuesViewMode === 'control' && watchedProblems.length === 0 ? (
+              {issuesViewMode === 'control' && !filteredProblems.some((p) => p.watched === true) ? (
                 <div style={emptyBox}>Нет задач на контроле. Нажмите 👁 чтобы добавить.</div>
               ) : issuesViewMode === 'list' || issuesViewMode === 'control' ? (
                 isMobile ? (
                   <div style={listWrap}>
-                    {(issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).length === 0 ? (
+                    {(issuesViewMode === 'control' ? filteredProblems.filter((p) => p.watched === true) : filteredProblems).length === 0 ? (
                       <div style={emptyBox}>Активных проблем нет</div>
-                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).map((problem, idx) => {
+                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => p.watched === true) : filteredProblems).map((problem, idx) => {
                       const removing = Boolean(removingProblemIds[problem.id])
                       const intro: CSSProperties = uiMounted
                         ? { opacity: 1, transform: 'translateY(0)' }
@@ -1642,10 +1679,10 @@ export default function Page() {
                         </div>
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
-                        {problemDeadlineDay(problem) ? (
+                        {deadlineDayForUi(problem) ? (
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(problemDeadlineDay(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                              ⏰ Срок: {formatDeadlineLabel(problemDeadlineDay(problem))}
+                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlineDayForUi(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                              ⏰ Срок: {formatDeadlineLabel(deadlineDayForUi(problem))}
                             </div>
                             <button
                               type="button"
@@ -1660,12 +1697,21 @@ export default function Page() {
                         ) : null}
 
                         <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-                          <button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
-                          <button style={secondaryMiniButton} onClick={() => openDeadline(problem.id)}>📅</button>
+                          <button type="button" style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
                           <button
-                            style={{ ...secondaryMiniButton, ...(closePressedId === problem.id ? { transform: 'scale(0.9)' } : {}) }}
-                            onClick={() => requestClose(problem.id)}
-                            disabled={closingId === problem.id}
+                            type="button"
+                            style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
+                            title="Взять на контроль"
+                            aria-label="Взять на контроль"
+                            onClick={() => void toggleWatch(problem.id)}
+                          >
+                            👁
+                          </button>
+                          <button type="button" style={secondaryMiniButton} onClick={() => openDeadline(problem.id)}>📅</button>
+                          <button
+                            type="button"
+                            style={secondaryMiniButton}
+                            onClick={() => void closeProblem(problem.id)}
                           >
                             Закрыть
                           </button>
@@ -1701,7 +1747,7 @@ export default function Page() {
                   <tbody>
                     {filteredProblems.length === 0 ? (
                       <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
-                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).map((problem, idx) => {
+                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => p.watched === true) : filteredProblems).map((problem, idx) => {
                       const removing = Boolean(removingProblemIds[problem.id])
                       const intro: CSSProperties = uiMounted
                         ? { opacity: 1, transform: 'translateY(0)' }
@@ -1714,7 +1760,7 @@ export default function Page() {
                         id={`problem-${problem.id}`}
                         style={{
                           ...(highlightedIssueId === problem.id ? highlightedRow : undefined),
-                          ...(watchedProblems.includes(problem.id) ? watchedRow : undefined),
+                          ...(problem.watched === true ? watchedRow : undefined),
                           ...intro,
                           ...hover,
                           ...out,
@@ -1727,10 +1773,10 @@ export default function Page() {
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                          {problemDeadlineDay(problem) ? (
+                          {deadlineDayForUi(problem) ? (
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                              <div style={{ ...tinyCellText, color: isDeadlineOverdue(problemDeadlineDay(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                                ⏰ Срок: {formatDeadlineLabel(problemDeadlineDay(problem))}
+                              <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlineDayForUi(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                                ⏰ Срок: {formatDeadlineLabel(deadlineDayForUi(problem))}
                               </div>
                               <button
                                 type="button"
@@ -1794,10 +1840,10 @@ export default function Page() {
                           <div style={actionsRow}>
                             <button
                               type="button"
-                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(watchedProblems.includes(problem.id) ? watchedIcon : {}) }}
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(problem.watched === true ? watchedIcon : {}) }}
                               title="Взять на контроль"
                               aria-label="Взять на контроль"
-                              onClick={() => toggleWatch(problem.id)}
+                              onClick={() => void toggleWatch(problem.id)}
                             >
                               👁
                             </button>
