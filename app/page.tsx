@@ -169,7 +169,7 @@ export default function Page() {
   const [selectedProblemForHistory, setSelectedProblemForHistory] = useState<string>('all')
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
   const [highlightedIssueId, setHighlightedIssueId] = useState<string | null>(null)
-  const [watchedLocalIds, setWatchedLocalIds] = useState<Record<string, boolean>>({})
+  const [watchedProblems, setWatchedProblems] = useState<string[]>([])
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
   const [uiToast, setUiToast] = useState<string | null>(null)
@@ -503,13 +503,18 @@ export default function Page() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
   }, [activeProblemsBase])
 
-  const closedProblems = useMemo(() => {
+  const closedProblemsComputed = useMemo(() => {
     return problems
       .filter((p) => p.status === 'closed' || p.is_active === false)
       .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
       .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
       .slice(0, 30)
   }, [problems, selectedProject, dateFrom, dateTo])
+
+  const [closedProblems, setClosedProblems] = useState<Problem[]>([])
+  useEffect(() => {
+    setClosedProblems(closedProblemsComputed)
+  }, [closedProblemsComputed])
 
   const filteredProblems = useMemo(() => {
     const result = activeProblemsBase
@@ -961,9 +966,14 @@ export default function Page() {
     }
   }
 
-  async function closeProblem(problemId: string) {
+  // Diagnostics for interactive actions
+  const closeProblem = async (problemId: string) => {
+    console.log('[closeProblem] start', { problemId, companyId })
+    if (!companyId) {
+      console.error('No companyId')
+      return
+    }
     try {
-      setClosingId(problemId)
       const { error } = await supabase
         .from('problems')
         .update({
@@ -973,19 +983,25 @@ export default function Page() {
         .eq('id', problemId)
         .eq('company_id', companyId)
 
-      if (!error) {
-        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      if (error) {
+        console.error('Close error:', error)
+        return
       }
-    } catch (err) {
-      console.error('Ошибка закрытия проблемы:', err)
-    } finally {
-      setClosingId(null)
+
+      setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      console.log('[closeProblem] ok', { problemId })
+    } catch (e) {
+      console.error('Close exception:', e)
     }
   }
 
-  async function reopenProblem(problemId: string) {
+  const reopenProblem = async (problemId: string) => {
+    console.log('[reopenProblem] start', { problemId, companyId })
+    if (!companyId) {
+      console.error('No companyId')
+      return
+    }
     try {
-      setReopeningId(problemId)
       const { error } = await supabase
         .from('problems')
         .update({
@@ -995,40 +1011,24 @@ export default function Page() {
         .eq('id', problemId)
         .eq('company_id', companyId)
 
-      if (!error) {
-        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      if (error) {
+        console.error('Reopen error:', error)
+        return
       }
-    } catch (err) {
-      console.error('Ошибка переоткрытия проблемы:', err)
-    } finally {
-      setReopeningId(null)
+
+      setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
+      console.log('[reopenProblem] ok', { problemId })
+    } catch (e) {
+      console.error('Reopen exception:', e)
     }
   }
 
-  async function watchProblem(problemId: string) {
-    try {
-      const { error } = await supabase
-        .from('problems')
-        .update({ watched: true })
-        .eq('id', problemId)
-        .eq('company_id', companyId)
-
-      if (!error) {
-        setProblems((prev) => prev.map((p) => (p.id === problemId ? ({ ...p, watched: true } as Problem) : p)))
-        return
-      }
-
-      const msg = String((error as any)?.message || '')
-      if (msg.toLowerCase().includes('watched') && msg.toLowerCase().includes('column')) {
-        setWatchedLocalIds((cur) => ({ ...cur, [problemId]: true }))
-        return
-      }
-
-      console.error('watchProblem error:', error)
-    } catch (e) {
-      console.error('watchProblem failed:', e)
-      setWatchedLocalIds((cur) => ({ ...cur, [problemId]: true }))
-    }
+  const toggleWatch = (problemId: string) => {
+    console.log('[toggleWatch] click', { problemId })
+    setWatchedProblems((prev) => {
+      const isWatched = prev.includes(problemId)
+      return isWatched ? prev.filter((id) => id !== problemId) : [...prev, problemId]
+    })
   }
 
   const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
@@ -1354,7 +1354,7 @@ export default function Page() {
                         id={`problem-${problem.id}`}
                         style={{
                           ...(highlightedIssueId === problem.id ? highlightedRow : undefined),
-                          ...(Boolean(problem.watched) || Boolean(watchedLocalIds[problem.id]) ? watchedRow : undefined),
+                          ...(watchedProblems.includes(problem.id) ? watchedRow : undefined),
                         }}
                       >
                         <td style={cellStrong}>
@@ -1409,10 +1409,10 @@ export default function Page() {
                           <div style={actionsRow}>
                             <button
                               type="button"
-                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(Boolean(problem.watched) || Boolean(watchedLocalIds[problem.id]) ? watchedIcon : {}) }}
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(watchedProblems.includes(problem.id) ? watchedIcon : {}) }}
                               title="Взять на контроль"
                               aria-label="Взять на контроль"
-                              onClick={() => watchProblem(problem.id)}
+                              onClick={() => toggleWatch(problem.id)}
                             >
                               👁
                             </button>
