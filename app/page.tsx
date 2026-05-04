@@ -189,6 +189,10 @@ export default function Page() {
   const [historyProjectFilter, setHistoryProjectFilter] = useState<string>('all')
   const [historyEventFilter, setHistoryEventFilter] = useState<'all' | 'created' | 'closed' | 'updated'>('all')
   const [expandedHistoryStages, setExpandedHistoryStages] = useState<Record<string, boolean>>({})
+  const [uiMounted, setUiMounted] = useState(false)
+  const [hoverKey, setHoverKey] = useState<string | null>(null)
+  const [removingProblemIds, setRemovingProblemIds] = useState<Record<string, boolean>>({})
+  const [closePressedId, setClosePressedId] = useState<string | null>(null)
 
   async function fetchTasks() {
     let query = supabase
@@ -432,6 +436,10 @@ export default function Page() {
     apply()
     mq.addEventListener?.('change', apply)
     return () => mq.removeEventListener?.('change', apply)
+  }, [])
+
+  useEffect(() => {
+    setUiMounted(true)
   }, [])
 
   useEffect(() => {
@@ -872,8 +880,8 @@ export default function Page() {
   function sanitizeJournalComment(value: string | null | undefined) {
     const raw = String(value || '')
     if (!raw) return ''
-    const cut = raw.split('KEY:')[0]
-    const cleaned = cut.replace(/Материал:\s*не указан/gi, '').trim()
+    const withoutKey = raw.replace(/KEY:.*$/gmi, '')
+    const cleaned = withoutKey.replace(/Материал:\s*не указан/gi, '').trim()
     return cleaned
   }
 
@@ -1012,6 +1020,13 @@ export default function Page() {
       const isWatched = prev.includes(problemId)
       return isWatched ? prev.filter((id) => id !== problemId) : [...prev, problemId]
     })
+  }
+
+  function requestClose(problemId: string) {
+    setClosePressedId(problemId)
+    window.setTimeout(() => setClosePressedId((cur) => (cur === problemId ? null : cur)), 140)
+    setRemovingProblemIds((cur) => ({ ...cur, [problemId]: true }))
+    window.setTimeout(() => closeProblem(problemId), 280)
   }
 
   const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
@@ -1195,16 +1210,22 @@ export default function Page() {
           {blockers.length === 0 ? <div style={emptyBox}>Алертов нет</div> : (
             <>
               <div style={listWrap}>
-                {blockers.map((item) => {
+                {blockers.map((item, idx) => {
                   const clamp: CSSProperties =
                     isMobile && !alertExpandedMobile
                       ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
                       : {}
+                  const intro: CSSProperties = uiMounted
+                    ? { opacity: 1, transform: 'translateX(0)' }
+                    : { opacity: 0, transform: 'translateX(-10px)' }
+                  const hover: CSSProperties = hoverKey === `alert_${item.id}` ? hoverLift : {}
                   return (
                     <button
                       key={item.id}
-                      style={alertRowButton}
+                      style={{ ...alertRowButton, ...intro, ...hover, transition: 'all 0.3s ease', transitionDelay: `${idx * 60}ms` }}
                       onClick={() => scrollToIssue(item.id)}
+                      onMouseEnter={() => setHoverKey(`alert_${item.id}`)}
+                      onMouseLeave={() => setHoverKey((cur) => (cur === `alert_${item.id}` ? null : cur))}
                     >
                       <div style={{ ...listTitle, ...clamp }}>{item.project_name || 'Без объекта'} — {item.title}</div>
                       <div style={{ ...metaLine, ...clamp }}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {item.days_count || 1} дн.</div>
@@ -1283,8 +1304,21 @@ export default function Page() {
                   <div style={listWrap}>
                     {filteredProblems.length === 0 ? (
                       <div style={emptyBox}>Активных проблем нет</div>
-                    ) : filteredProblems.map((problem) => (
-                      <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedIssueId === problem.id ? highlightedRow : {}) }}>
+                    ) : filteredProblems.map((problem, idx) => {
+                      const removing = Boolean(removingProblemIds[problem.id])
+                      const intro: CSSProperties = uiMounted
+                        ? { opacity: 1, transform: 'translateY(0)' }
+                        : { opacity: 0, transform: 'translateY(10px)' }
+                      const hover = hoverKey === `card_${problem.id}` ? hoverLift : {}
+                      const out: CSSProperties = removing ? fadeOutCard : {}
+                      return (
+                      <div
+                        key={problem.id}
+                        id={`problem-${problem.id}`}
+                        style={{ ...listItem, ...intro, ...hover, ...out, transition: 'all 0.2s ease', transitionDelay: `${idx * 50}ms` }}
+                        onMouseEnter={() => setHoverKey(`card_${problem.id}`)}
+                        onMouseLeave={() => setHoverKey((cur) => (cur === `card_${problem.id}` ? null : cur))}
+                      >
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                           <div style={listTitle}>
                             {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
@@ -1302,15 +1336,16 @@ export default function Page() {
                         <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                           <button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
                           <button
-                            style={secondaryMiniButton}
-                            onClick={() => closeProblem(problem.id)}
+                            style={{ ...secondaryMiniButton, ...(closePressedId === problem.id ? { transform: 'scale(0.9)' } : {}) }}
+                            onClick={() => requestClose(problem.id)}
                             disabled={closingId === problem.id}
                           >
                             Закрыть
                           </button>
                         </div>
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 ) : (
                 <table style={tableStyle}>
@@ -1331,19 +1366,32 @@ export default function Page() {
                   <tbody>
                     {filteredProblems.length === 0 ? (
                       <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
-                    ) : filteredProblems.map((problem) => (
+                    ) : filteredProblems.map((problem, idx) => {
+                      const removing = Boolean(removingProblemIds[problem.id])
+                      const intro: CSSProperties = uiMounted
+                        ? { opacity: 1, transform: 'translateY(0)' }
+                        : { opacity: 0, transform: 'translateY(10px)' }
+                      const hover = hoverKey === `row_${problem.id}` ? hoverLift : {}
+                      const out: CSSProperties = removing ? fadeOutRow : {}
+                      return (
                       <tr
                         key={problem.id}
                         id={`problem-${problem.id}`}
                         style={{
                           ...(highlightedIssueId === problem.id ? highlightedRow : undefined),
                           ...(watchedProblems.includes(problem.id) ? watchedRow : undefined),
+                          ...intro,
+                          ...hover,
+                          ...out,
+                          transition: 'all 0.2s ease',
+                          transitionDelay: `${idx * 50}ms`,
                         }}
+                        onMouseEnter={() => setHoverKey(`row_${problem.id}`)}
+                        onMouseLeave={() => setHoverKey((cur) => (cur === `row_${problem.id}` ? null : cur))}
                       >
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                          <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
                         </td>
                         <td style={cell}>{problem.stage || 'Без этапа'}</td>
                         <td style={cell}>{problem.material || 'не указан'}</td>
@@ -1413,7 +1461,7 @@ export default function Page() {
                               style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
                               title="Закрыть проблему"
                               aria-label="Закрыть"
-                              onClick={() => closeProblem(problem.id)}
+                              onClick={() => requestClose(problem.id)}
                               disabled={closingId === problem.id}
                             >
                               ✕
@@ -1421,7 +1469,8 @@ export default function Page() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
                 )
@@ -1480,7 +1529,7 @@ export default function Page() {
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
                                               <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
-                                              {isMobile ? null : <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>}
+                                              {/* technical id hidden */}
                                               {problem.photo_url ? (
                                                 <button
                                                   type="button"
@@ -1515,7 +1564,7 @@ export default function Page() {
                                                 <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
                                                   <td style={cellStrong}>
                                                     <div>{problem.title}</div>
-                                                    {isMobile ? null : <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>}
+                                                    {/* technical id hidden */}
                                                   </td>
                                                   <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
                                                   <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
@@ -1989,13 +2038,33 @@ export default function Page() {
 }
 
 function KpiCard({ label, value, color, onClick }: { label: string; value: number; color: string; onClick?: () => void }) {
+  const [animated, setAnimated] = useState(0)
+
+  useEffect(() => {
+    const from = 0
+    const to = Number(value || 0)
+    const durationMs = 1000
+    const startedAt = performance.now()
+
+    let raf = 0
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startedAt) / durationMs)
+      const next = Math.round(from + (to - from) * t)
+      setAnimated(next)
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [value])
+
   return (
     <button
       onClick={onClick}
       style={{ ...kpiCardButton, borderColor: `${color}55` }}
     >
       <div style={kpiLabel}><span style={{ ...dot, background: color }} />{label}</div>
-      <div style={kpiValue}>{value}</div>
+      <div style={kpiValue}>{animated}</div>
     </button>
   )
 }
@@ -2086,7 +2155,7 @@ function EmployeeStatusPanel({
 }) {
   if (isMobile) {
     return (
-      <div style={panel}>
+      <div style={{ ...panel, gridColumn: '1 / -1' }}>
         <div style={sectionTitle}>Статус задач сотрудников</div>
         <div style={sectionSubTitle}>Проблемы, риски, просрочки и закрытые задачи</div>
         {rows.length === 0 ? <div style={emptyBox}>Нет данных</div> : (
@@ -2109,7 +2178,7 @@ function EmployeeStatusPanel({
   }
 
   return (
-    <div style={panel}>
+    <div style={{ ...panel, gridColumn: '1 / -1' }}>
       <div style={sectionTitle}>Статус задач сотрудников</div>
       <div style={sectionSubTitle}>Клик по строке фильтрует “Активные проблемы” по ответственному</div>
       {rows.length === 0 ? <div style={emptyBox}>Нет данных</div> : (
@@ -2121,7 +2190,6 @@ function EmployeeStatusPanel({
                 <th style={cellHeader}>Проблемы</th>
                 <th style={cellHeader}>Риски</th>
                 <th style={cellHeader}>Просрочено</th>
-                <th style={cellHeader}>Закрыто</th>
               </tr>
             </thead>
             <tbody>
@@ -2138,7 +2206,6 @@ function EmployeeStatusPanel({
                     <td style={cell}>{r.open_problems}</td>
                     <td style={cell}>{r.open_risks}</td>
                     <td style={{ ...cell, ...overdueStyle }}>{r.overdue_tasks}</td>
-                    <td style={cell}>{r.closed_tasks}</td>
                   </tr>
                 )
               })}
@@ -2332,6 +2399,9 @@ const actionIconButton: CSSProperties = {
 const actionIconButtonDanger: CSSProperties = { ...actionIconButton, border: '1px solid #fecaca', background: '#fff7f7', color: '#991b1b' }
 const watchedRow: CSSProperties = { borderLeft: '3px solid #2563EB' }
 const watchedIcon: CSSProperties = { color: '#2563EB', borderColor: '#93c5fd' }
+const hoverLift: CSSProperties = { boxShadow: '0 4px 12px rgba(0,0,0,0.08)', transform: 'translateY(-1px)' }
+const fadeOutRow: CSSProperties = { opacity: 0, transform: 'translateY(10px)' }
+const fadeOutCard: CSSProperties = { opacity: 0, transform: 'translateY(10px)', maxHeight: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, overflow: 'hidden' }
 const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
 const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
 const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
