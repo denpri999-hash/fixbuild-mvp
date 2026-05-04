@@ -79,6 +79,7 @@ type ProblemFilter = 'all' | 'red' | 'yellow'
 type EventsFilter = 'all' | 'problems' | 'photo' | 'statuses'
 
 const role = 'admin'
+type DashboardTab = 'problems' | 'events' | 'photos' | 'closed' | 'history' | 'journal'
 
 const severityOrder: Record<string, number> = {
   red: 1,
@@ -140,6 +141,14 @@ export default function Page() {
   const router = useRouter()
   const { companyId, loading: companyLoading } = useCompany()
 
+  const [isMobile, setIsMobile] = useState(false)
+  const [lightboxPhoto, setLightboxPhoto] = useState<{
+    url: string
+    title: string
+    projectName: string
+    at: string
+  } | null>(null)
+
   const [tasks, setTasks] = useState<Task[]>([])
   const [problems, setProblems] = useState<Problem[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -170,6 +179,9 @@ export default function Page() {
   const [telegramEnabled, setTelegramEnabled] = useState(false)
   const [telegramChatId, setTelegramChatId] = useState('')
   const [telegramSaving, setTelegramSaving] = useState(false)
+  const [alertExpandedMobile, setAlertExpandedMobile] = useState(false)
+  const [activeTab, setActiveTab] = useState<DashboardTab>('problems')
+  const [openContactId, setOpenContactId] = useState<string | null>(null)
 
   async function fetchTasks() {
     let query = supabase
@@ -407,6 +419,25 @@ export default function Page() {
   }, [companyId])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(max-width: 767px)')
+    const apply = () => setIsMobile(mq.matches)
+    apply()
+    mq.addEventListener?.('change', apply)
+    return () => mq.removeEventListener?.('change', apply)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!lightboxPhoto) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxPhoto(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [lightboxPhoto])
+
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem('issues_view_mode')
       if (saved === 'list' || saved === 'by_project') setIssuesViewMode(saved)
@@ -414,6 +445,34 @@ export default function Page() {
       // ignore
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const saved = window.localStorage.getItem('dashboard_active_tab')
+      if (
+        saved === 'problems' ||
+        saved === 'events' ||
+        saved === 'photos' ||
+        saved === 'closed' ||
+        saved === 'history' ||
+        saved === 'journal'
+      ) {
+        setActiveTab(saved)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('dashboard_active_tab', activeTab)
+    } catch {
+      // ignore
+    }
+  }, [activeTab])
 
   useEffect(() => {
     try {
@@ -624,6 +683,8 @@ export default function Page() {
       meta?: string
       issueId?: string | null
       photoUrl?: string | null
+      personName?: string | null
+      personPhone?: string | null
     }> = []
 
     // Problems: история проблем
@@ -663,6 +724,8 @@ export default function Page() {
         at: t.updated_at || t.planned_date || new Date().toISOString(),
         meta: taskStatusText(t.color_indicator),
         photoUrl: t.photo_url,
+        personName: t.sender_name,
+        personPhone: t.sender_phone,
       })
     })
 
@@ -682,14 +745,17 @@ export default function Page() {
 
   function scrollToIssue(problemId: string | null | undefined) {
     if (!problemId) return
-    scrollToActiveIssues()
+    setActiveTab('problems')
     window.setTimeout(() => {
-      const row = document.getElementById(`issue-${problemId}`)
+      scrollToActiveIssues()
+      window.setTimeout(() => {
+        const row = document.getElementById(`problem-${problemId}`)
       if (!row) return
       row.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setHighlightedIssueId(problemId)
       window.setTimeout(() => setHighlightedIssueId((current) => (current === problemId ? null : current)), 2600)
-    }, 120)
+      }, 120)
+    }, 30)
   }
 
   function showToast(text: string) {
@@ -702,6 +768,24 @@ export default function Page() {
     if (!digits) return ''
     if (digits.length === 11 && digits.startsWith('8')) return `7${digits.slice(1)}`
     return digits
+  }
+
+  function normalizePhoneForTel(value: string | null | undefined) {
+    const digits = String(value || '').replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.length === 11 && digits.startsWith('8')) return `+7${digits.slice(1)}`
+    if (digits.length === 11 && digits.startsWith('7')) return `+${digits}`
+    if (digits.startsWith('+')) return digits
+    return `+${digits}`
+  }
+
+  function handlePersonClick(id: string, phone: string) {
+    if (!phone) return
+    if (isMobile) {
+      window.location.href = `tel:${phone}`
+      return
+    }
+    setOpenContactId((cur) => (cur === id ? null : id))
   }
 
   function requestUpdate(problem: Problem) {
@@ -871,16 +955,34 @@ export default function Page() {
     return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
   }
 
+  const pageWrapR: CSSProperties = { ...pageWrap, padding: isMobile ? 12 : 28 }
+  const headerR: CSSProperties = { ...header, alignItems: isMobile ? 'stretch' : header.alignItems }
+  const panelR: CSSProperties = { ...panel, padding: isMobile ? 12 : 18 }
+  const sidePanelR: CSSProperties = { ...sidePanel, padding: isMobile ? 12 : 18 }
+  const kpiGridR: CSSProperties = {
+    ...kpiGrid,
+    gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+    gap: isMobile ? 12 : 14,
+  }
+  const grid4R: CSSProperties = {
+    ...grid4,
+    gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+    gap: isMobile ? 12 : 14,
+  }
+  const filtersRowR: CSSProperties = { ...filtersRow, justifyContent: isMobile ? 'flex-start' : filtersRow.justifyContent }
+  const authChipR: CSSProperties = { ...authChip, padding: isMobile ? '0px' : authChip.padding }
+  const actionIconSize = isMobile ? 44 : 32
+
   return (
-    <main style={pageWrap}>
+    <main style={pageWrapR}>
       <div style={container}>
-        <header style={header}>
+        <header style={headerR}>
           <div>
             <h1 style={title}>FixBuild Dashboard</h1>
             <p style={subtitle}>Панель директора: реальные проблемы, риски, этапы, причины, объекты, фотоархив и сотрудники</p>
           </div>
 
-          <div style={filtersRow}>
+          <div style={filtersRowR}>
             <select style={projectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
               <option value="all">Все объекты</option>
               {projects.map((project) => (
@@ -890,8 +992,8 @@ export default function Page() {
             <input style={dateInput} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input style={dateInput} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             <button style={secondaryButton} onClick={fetchAll}>Обновить</button>
-            <div style={authChip}>
-              <span>{userEmail || '—'}</span>
+            <div style={authChipR}>
+              {isMobile ? null : <span>{userEmail || '—'}</span>}
               <button style={secondaryMiniButton} onClick={logout}>Выйти</button>
             </div>
           </div>
@@ -899,12 +1001,10 @@ export default function Page() {
 
         {errorText ? <div style={errorBox}>{errorText}</div> : null}
 
-        <div style={clientModeBox}>
-          Режим клиента: данные отфильтрованы по компании. company_id: {companyId}
-        </div>
+        <div style={clientModeBox}>Режим клиента: данные вашей компании</div>
 
         {/* KPI */}
-        <section style={kpiGrid}>
+        <section style={kpiGridR}>
           <KpiCard label="Проблемы" value={redCount} color="#ef4444" onClick={scrollToActiveIssues} />
           <KpiCard label="Риски" value={yellowCount} color="#f59e0b" onClick={scrollToActiveIssues} />
           <KpiCard label="В норме" value={greenCount} color="#22c55e" onClick={scrollToActiveIssues} />
@@ -915,7 +1015,7 @@ export default function Page() {
         <CollapsibleSection
           title="Отчёт директору"
           storageKey="report_expanded"
-          defaultExpanded={true}
+          defaultExpanded={!isMobile}
           headerActions={(
             <>
               <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать'}</button>
@@ -924,35 +1024,61 @@ export default function Page() {
           )}
         >
           <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
-          <pre style={reportBox}>{reportText}</pre>
+          <ReportCard reportText={reportText} problems={redCount} risks={yellowCount} ok={greenCount} blockers={blockers} />
         </CollapsibleSection>
 
         {/* Alert */}
-        <section style={panel}>
-          <div style={sectionTitle}>Alert</div>
-          <div style={sectionSubTitle}>Главные блокеры. Клик по строке — скролл к проблеме в Active Issues</div>
+        <section style={panelR}>
+          <div style={sectionTitle}>Внимание</div>
+          <div style={sectionSubTitle}>Главные блокеры по выбранному объекту</div>
           {blockers.length === 0 ? <div style={emptyBox}>Алертов нет</div> : (
-            <div style={listWrap}>
-              {blockers.map((item) => (
-                <button
-                  key={item.id}
-                  style={alertRowButton}
-                  onClick={() => scrollToIssue(item.id)}
-                >
-                  <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.title}</div>
-                  <div style={metaLine}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {item.days_count || 1} дн.</div>
-                </button>
-              ))}
-            </div>
+            <>
+              <div style={listWrap}>
+                {blockers.map((item) => {
+                  const clamp: CSSProperties =
+                    isMobile && !alertExpandedMobile
+                      ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
+                      : {}
+                  return (
+                    <button
+                      key={item.id}
+                      style={alertRowButton}
+                      onClick={() => scrollToIssue(item.id)}
+                    >
+                      <div style={{ ...listTitle, ...clamp }}>{item.project_name || 'Без объекта'} — {item.title}</div>
+                      <div style={{ ...metaLine, ...clamp }}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {item.days_count || 1} дн.</div>
+                    </button>
+                  )
+                })}
+              </div>
+              {isMobile ? (
+                <div style={{ marginTop: 10 }}>
+                  <button style={secondaryButton} onClick={() => setAlertExpandedMobile((v) => !v)}>
+                    {alertExpandedMobile ? 'Свернуть' : 'Показать все'}
+                  </button>
+                </div>
+              ) : null}
+            </>
           )}
         </section>
 
-        {/* Активные проблемы */}
-        <section style={panel} id="active-issues">
+        <div style={tabsWrap}>
+          <button type="button" style={activeTab === 'problems' ? tabActive : tabButton} onClick={() => setActiveTab('problems')}>Проблемы</button>
+          <button type="button" style={activeTab === 'events' ? tabActive : tabButton} onClick={() => setActiveTab('events')}>События</button>
+          <button type="button" style={activeTab === 'photos' ? tabActive : tabButton} onClick={() => setActiveTab('photos')}>Фото</button>
+          <button type="button" style={activeTab === 'closed' ? tabActive : tabButton} onClick={() => setActiveTab('closed')}>Закрытые</button>
+          <button type="button" style={activeTab === 'history' ? tabActive : tabButton} onClick={() => setActiveTab('history')}>История</button>
+          <button type="button" style={activeTab === 'journal' ? tabActive : tabButton} onClick={() => setActiveTab('journal')}>Журнал</button>
+        </div>
+
+        {activeTab === 'problems' ? (
+          <>
+          {/* Активные проблемы */}
+          <section style={panelR} id="active-issues">
             <div style={panelHeader}>
               <div>
                 <div style={sectionTitle}>Активные проблемы</div>
-                <div style={sectionSubTitle}>Здесь директор видит реальные открытые проблемы с этапом, материалом, причиной и ответственным</div>
+                <div style={sectionSubTitle}>Открытые проблемы и риски по всем объектам</div>
               </div>
               <div style={actionRow}>
                 <select style={projectSelect} value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
@@ -973,13 +1099,13 @@ export default function Page() {
                   style={issuesViewMode === 'list' ? toggleActive : toggleButton}
                   onClick={() => setIssuesViewMode('list')}
                 >
-                  Список ({filteredProblems.length})
+                  Список
                 </button>
                 <button
                   style={issuesViewMode === 'by_project' ? toggleActive : toggleButton}
                   onClick={() => setIssuesViewMode('by_project')}
                 >
-                  По объектам ({groupedIssues.length} объектов)
+                  По объектам
                 </button>
               </div>
               {issuesViewMode === 'by_project' ? (
@@ -992,6 +1118,41 @@ export default function Page() {
 
             <div style={tableWrap}>
               {issuesViewMode === 'list' ? (
+                isMobile ? (
+                  <div style={listWrap}>
+                    {filteredProblems.length === 0 ? (
+                      <div style={emptyBox}>Активных проблем нет</div>
+                    ) : filteredProblems.map((problem) => (
+                      <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedIssueId === problem.id ? highlightedRow : {}) }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                          <div style={listTitle}>
+                            {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
+                            {severityLabel(problem.severity)} {problem.project_name ? ` ${problem.project_name}` : ''}
+                          </div>
+                          <div style={{ fontWeight: 900, color: '#334155', fontSize: 12 }}>{problem.days_count || 1} дн.</div>
+                        </div>
+
+                        <div style={metaLine}>
+                          {normalizeNullable(problem.stage, 'Без этапа')} · {normalizeNullable(problem.responsible_person, 'Не назначен')} · {problem.days_count || 1} дн.
+                        </div>
+
+                        <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
+                        <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+
+                        <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                          <button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
+                          <button
+                            style={secondaryMiniButton}
+                            onClick={() => showToast('UI: Закрытие (без backend)')}
+                            disabled={closingId === problem.id}
+                          >
+                            Закрыть
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
                 <table style={tableStyle}>
                   <thead>
                     <tr>
@@ -1011,7 +1172,7 @@ export default function Page() {
                     {filteredProblems.length === 0 ? (
                       <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
                     ) : filteredProblems.map((problem) => (
-                      <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                      <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
@@ -1020,21 +1181,75 @@ export default function Page() {
                         <td style={cell}>{problem.stage || 'Без этапа'}</td>
                         <td style={cell}>{problem.material || 'не указан'}</td>
                         <td style={cell}>{problem.reason || 'прочее'}</td>
-                        <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
+                        <td style={cell}>
+                          <div style={personCellWrap}>
+                            <button
+                              type="button"
+                              style={personButton}
+                              onMouseEnter={() => !isMobile && setOpenContactId(`p_${problem.id}`)}
+                              onMouseLeave={() => !isMobile && setOpenContactId((cur) => (cur === `p_${problem.id}` ? null : cur))}
+                              onClick={() => handlePersonClick(`p_${problem.id}`, normalizePhoneForTel(problem.sender_phone))}
+                              title={problem.sender_phone ? 'Показать телефон' : undefined}
+                            >
+                              {problem.responsible_person || 'Не назначен'}
+                            </button>
+                            {openContactId === `p_${problem.id}` && problem.sender_phone ? (
+                              <div style={personTooltip}>
+                                <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
+                                <div style={metaLine}>{normalizePhoneForTel(problem.sender_phone)}</div>
+                                <a href={`tel:${normalizePhoneForTel(problem.sender_phone)}`} style={callLink}>📞 Позвонить</a>
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
                         <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
                         <td style={cell}>{problem.days_count || 1} дн.</td>
-                        <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
+                        <td style={cell}>
+                          {problem.photo_url ? (
+                            <button
+                              type="button"
+                              style={photoInlineButton}
+                              onClick={() => setLightboxPhoto({
+                                url: problem.photo_url!,
+                                title: problem.title,
+                                projectName: problem.project_name || 'Без объекта',
+                                at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                              })}
+                            >
+                              📷 Фото
+                            </button>
+                          ) : '-'}
+                        </td>
                         <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
                         <td style={cell}>
-                          <div style={actionsCol}>
-                            <button style={actionChip} onClick={() => showToast('UI: Взято на контроль')}>Взять на контроль</button>
-                            <button style={actionChip} onClick={() => requestUpdate(problem)}>Запросить обновление</button>
+                          <div style={actionsRow}>
                             <button
-                              style={actionChipDanger}
+                              type="button"
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                              title="Взять на контроль"
+                              aria-label="Взять на контроль"
+                              onClick={() => showToast('UI: Взято на контроль')}
+                            >
+                              👁
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                              title="Запросить обновление"
+                              aria-label="Запросить обновление"
+                              onClick={() => requestUpdate(problem)}
+                            >
+                              ↺
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
+                              title="Закрыть"
+                              aria-label="Закрыть"
                               onClick={() => showToast('UI: Закрытие (без backend)')}
                               disabled={closingId === problem.id}
                             >
-                              Закрыть
+                              ✓
                             </button>
                           </div>
                         </td>
@@ -1042,6 +1257,7 @@ export default function Page() {
                     ))}
                   </tbody>
                 </table>
+                )
               ) : (
                 groupedIssues.length === 0 ? (
                   <div style={emptyBox}>Нет задач для группировки</div>
@@ -1087,33 +1303,78 @@ export default function Page() {
                                     </button>
 
                                     {stageOpen ? (
-                                      <div style={{ marginTop: 10, overflowX: 'auto' }}>
-                                        <table style={tableStyle}>
-                                          <thead>
-                                            <tr>
-                                              <th style={cellHeader}>Проблема</th>
-                                              <th style={cellHeader}>Ответственный</th>
-                                              <th style={cellHeader}>Статус</th>
-                                              <th style={cellHeader}>Длится</th>
-                                              <th style={cellHeader}>Фото</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {st.tasks.map((problem) => (
-                                              <tr key={problem.id} id={`issue-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
-                                                <td style={cellStrong}>
-                                                  <div>{problem.title}</div>
-                                                  <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
-                                                </td>
-                                                <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
-                                                <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                                                <td style={cell}>{problem.days_count || 1} дн.</td>
-                                                <td style={cell}>{problem.photo_url ? <a href={problem.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
+                                      isMobile ? (
+                                        <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                                          {st.tasks.map((problem) => (
+                                            <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedIssueId === problem.id ? highlightedRow : {}) }}>
+                                              <div style={listTitleSmall}>
+                                                {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
+                                                {severityLabel(problem.severity)} · {problem.days_count || 1} дн.
+                                              </div>
+                                              <div style={{ fontWeight: 900 }}>{problem.title}</div>
+                                              <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
+                                              <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                                              {problem.photo_url ? (
+                                                <button
+                                                  type="button"
+                                                  style={photoInlineButton}
+                                                  onClick={() => setLightboxPhoto({
+                                                    url: problem.photo_url!,
+                                                    title: problem.title,
+                                                    projectName: problem.project_name || 'Без объекта',
+                                                    at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                  })}
+                                                >
+                                                  📷 Фото
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div style={{ marginTop: 10, overflowX: 'auto' }}>
+                                          <table style={tableStyle}>
+                                            <thead>
+                                              <tr>
+                                                <th style={cellHeader}>Проблема</th>
+                                                <th style={cellHeader}>Ответственный</th>
+                                                <th style={cellHeader}>Статус</th>
+                                                <th style={cellHeader}>Длится</th>
+                                                <th style={cellHeader}>Фото</th>
                                               </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      </div>
+                                            </thead>
+                                            <tbody>
+                                              {st.tasks.map((problem) => (
+                                                <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                                                  <td style={cellStrong}>
+                                                    <div>{problem.title}</div>
+                                                    <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                                                  </td>
+                                                  <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
+                                                  <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
+                                                  <td style={cell}>{problem.days_count || 1} дн.</td>
+                                                  <td style={cell}>
+                                                    {problem.photo_url ? (
+                                                      <button
+                                                        type="button"
+                                                        style={photoInlineButton}
+                                                        onClick={() => setLightboxPhoto({
+                                                          url: problem.photo_url!,
+                                                          title: problem.title,
+                                                          projectName: problem.project_name || 'Без объекта',
+                                                          at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                        })}
+                                                      >
+                                                        📷 Фото
+                                                      </button>
+                                                    ) : '-'}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )
                                     ) : null}
                                   </div>
                                 )
@@ -1129,232 +1390,313 @@ export default function Page() {
             </div>
         </section>
 
-        {/* Последние события */}
-        <section style={sidePanel}>
-          <div style={panelHeader}>
-            <div>
-              <div style={sectionTitle}>Последние события</div>
-              <div style={sectionSubTitle}>10 последних событий. Можно отфильтровать и показать все</div>
-            </div>
-            <div style={actionRow}>
-              <button style={eventsFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('all')}>Все</button>
-              <button style={eventsFilter === 'problems' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('problems')}>Проблемы</button>
-              <button style={eventsFilter === 'photo' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('photo')}>Фото</button>
-              <button style={eventsFilter === 'statuses' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('statuses')}>Статусы</button>
-            </div>
-          </div>
-
-          {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
-            <button
-              key={event.id}
-              style={eventButton}
-              onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
-            >
-              <div style={eventTopRow}>
-                <div style={listTitleSmall}>{event.title}</div>
-                <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
+          <CollapsibleSection title="Аналитика" storageKey="analytics_expanded" defaultExpanded={false}>
+            <section style={grid4R}>
+              <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
+              <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
+              <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
+              <div style={panelR}>
+                <div style={sectionTitle}>Итоги</div>
+                <div style={sectionSubTitle}>Короткий обзор по выбранному периоду</div>
+                <div style={summaryRow}><span>Проблемы</span><strong>{redCount}</strong></div>
+                <div style={summaryRow}><span>Риски</span><strong>{yellowCount}</strong></div>
+                <div style={summaryRow}><span>Требует внимания</span><strong>{attentionCount}</strong></div>
               </div>
-              <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
-              {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
-              {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
-            </button>
-          ))}
+            </section>
+          </CollapsibleSection>
+          </>
+        ) : null}
 
-          <div style={{ marginTop: 12 }}>
-            <button style={secondaryButton} onClick={() => setEventsShowAll((v) => !v)}>
-              {eventsShowAll ? 'Свернуть' : 'Показать все'}
-            </button>
-          </div>
-        </section>
+        {activeTab === 'events' ? (
+          <section style={panelR}>
+            <div style={panelHeader}>
+              <div>
+                <div style={sectionTitle}>Последние события</div>
+                <div style={sectionSubTitle}>10 последних событий. Можно отфильтровать и показать все</div>
+              </div>
+              <div style={actionRow}>
+                <button style={eventsFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('all')}>Все</button>
+                <button style={eventsFilter === 'problems' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('problems')}>Проблемы</button>
+                <button style={eventsFilter === 'photo' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('photo')}>Фото</button>
+                <button style={eventsFilter === 'statuses' ? activeFilterButton : filterButton} onClick={() => setEventsFilter('statuses')}>Статусы</button>
+              </div>
+            </div>
 
-        {/* Photos */}
-        <section style={panel}>
-          <div style={sectionTitle}>Фотоархив</div>
-          <div style={sectionSubTitle}>Фото, объект и дата</div>
-          {media.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
-            <div style={photoGrid}>{media.map((item) => (
-              <div key={item.id} style={photoCard}>
-                <a href={item.photo_url} target="_blank" rel="noreferrer" style={photoLink}><img src={item.photo_url} alt="Фото объекта" style={photoImage} /></a>
-                <div style={photoMeta}>
-                  <div style={metaLine}>{item.project_name || 'Без проекта'}</div>
-                  <div style={listTitleSmall}>{item.problem_title || 'Фото'}</div>
+            {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
+              <button
+                key={event.id}
+                style={eventButton}
+                onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
+              >
+                <div style={eventTopRow}>
+                  <div style={listTitleSmall}>{event.title}</div>
+                  <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
+                </div>
+                <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
+                {event.personName ? (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={personCellWrap}>
+                      <button
+                        type="button"
+                        style={personButton}
+                        onMouseEnter={() => !isMobile && setOpenContactId(event.id)}
+                        onMouseLeave={() => !isMobile && setOpenContactId((cur) => (cur === event.id ? null : cur))}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handlePersonClick(event.id, normalizePhoneForTel(event.personPhone))
+                        }}
+                        title={event.personPhone ? 'Показать телефон' : undefined}
+                      >
+                        {event.personName}
+                      </button>
+                      {openContactId === event.id && event.personPhone ? (
+                        <div style={personTooltip}>
+                          <div style={{ fontWeight: 900 }}>{event.personName}</div>
+                          <div style={metaLine}>{normalizePhoneForTel(event.personPhone)}</div>
+                          <a href={`tel:${normalizePhoneForTel(event.personPhone)}`} style={callLink}>📞 Позвонить</a>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
+                {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
+              </button>
+            ))}
+
+            <div style={{ marginTop: 12 }}>
+              <button style={secondaryButton} onClick={() => setEventsShowAll((v) => !v)}>
+                {eventsShowAll ? 'Свернуть' : 'Показать все'}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === 'photos' ? (
+          <section style={panelR}>
+            <div style={sectionTitle}>Фотоархив</div>
+            <div style={sectionSubTitle}>Фото, объект и дата</div>
+            {filteredMedia.length === 0 ? <div style={emptyBox}>Фотоархив пока пуст</div> : (
+              <div style={photoGrid}>{filteredMedia.map((item) => (
+                <div key={item.id} style={photoCard}>
+                  <button
+                    type="button"
+                    style={photoThumbButton}
+                    onClick={() => setLightboxPhoto({
+                      url: item.photo_url,
+                      title: item.problem_title || 'Фото',
+                      projectName: item.project_name || 'Без объекта',
+                      at: formatDateTime(item.created_at),
+                    })}
+                    aria-label="Открыть фото"
+                    title="Открыть фото"
+                  >
+                    <img src={item.photo_url} alt="Фото объекта" style={photoImage} />
+                  </button>
+                  <div style={photoMeta}>
+                    <div style={metaLine}>{item.project_name || 'Без проекта'}</div>
+                    <div style={listTitleSmall}>{item.problem_title || 'Фото'}</div>
+                    <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                  </div>
+                </div>
+              ))}</div>
+            )}
+          </section>
+        ) : null}
+
+        {activeTab === 'closed' ? (
+          <CollapsibleSection
+            title="Закрытые проблемы"
+            count={closedProblems.length}
+            storageKey="closed_issues_expanded"
+            defaultExpanded={true}
+          >
+            <div style={sectionSubTitle}>История вручную и автоматически закрытых проблем</div>
+            <div style={tableWrap}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={cellHeader}>Проблема</th>
+                    <th style={cellHeader}>Этап</th>
+                    <th style={cellHeader}>Материал</th>
+                    <th style={cellHeader}>Причина</th>
+                    <th style={cellHeader}>Ответственный</th>
+                    <th style={cellHeader}>Последнее обновление</th>
+                    <th style={cellHeader}>История</th>
+                    <th style={cellHeader}>Действие</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closedProblems.length === 0 ? <tr><td style={emptyCell} colSpan={8}>Закрытых проблем пока нет</td></tr> : closedProblems.map((problem) => (
+                    <tr key={problem.id}>
+                      <td style={cellStrong}>
+                        <div>{problem.title}</div>
+                        <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
+                      </td>
+                      <td style={cell}>{problem.stage || 'прочее'}</td>
+                      <td style={cell}>{problem.material || 'не указан'}</td>
+                      <td style={cell}>{problem.reason || 'прочее'}</td>
+                      <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
+                      <td style={cell}>{formatDateTime(problem.last_seen_at)}</td>
+                      <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
+                      <td style={cell}>{role === 'admin' ? <button style={secondaryMiniButton} onClick={() => reopenProblem(problem.id)} disabled={reopeningId === problem.id}>{reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}</button> : null}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CollapsibleSection>
+        ) : null}
+
+        {activeTab === 'history' ? (
+          <CollapsibleSection
+            title="История проблем"
+            count={filteredHistory.length}
+            storageKey="history_expanded"
+            defaultExpanded={true}
+            headerActions={(
+              <>
+                <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
+                  <option value="all">Все проблемы</option>
+                  {problems.map((problem) => (
+                    <option key={problem.id} value={problem.id}>{problem.project_name || 'Без проекта'} — {problem.title}</option>
+                  ))}
+                </select>
+                {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
+              </>
+            )}
+          >
+            <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
+            {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
+              <div style={listWrap}>{filteredHistory.map((item) => (
+                <div key={item.id} style={listItem}>
+                  <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.problem_title || 'Проблема'}</div>
                   <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                  <div style={taskSummary}>{item.event}</div>
+                  {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
                 </div>
+              ))}</div>
+            )}
+          </CollapsibleSection>
+        ) : null}
+
+        {activeTab === 'journal' ? (
+          <>
+            <CollapsibleSection
+              title="Журнал сообщений"
+              count={projectFilteredTasks.slice(0, 80).length}
+              storageKey="raw_tasks_expanded"
+              defaultExpanded={true}
+            >
+              <div style={sectionSubTitle}>Первичный поток сообщений. Управленческий смысл теперь в проблемах, этапах, причинах и сотрудниках.</div>
+              <div style={tableWrap}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={cellHeader}>Кто отправил</th>
+                      <th style={cellHeader}>Объект</th>
+                      <th style={cellHeader}>Задача</th>
+                      <th style={cellHeader}>Дата</th>
+                      <th style={cellHeader}>Статус</th>
+                      <th style={cellHeader}>Комментарий</th>
+                      <th style={cellHeader}>Фото</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectFilteredTasks.slice(0, 80).map((task) => (
+                      <tr key={task.id}>
+                        <td style={cell}>{task.sender_name || 'Не указан'}</td>
+                        <td style={cell}>{task.project_name || '-'}</td>
+                        <td style={cellStrong}>{task.title}</td>
+                        <td style={cell}>{formatDate(task.updated_at || task.planned_date)}</td>
+                        <td style={cell}><span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span></td>
+                        <td style={cell}>{task.ai_summary || '-'}</td>
+                        <td style={cell}>
+                          {task.photo_url ? (
+                            <button
+                              type="button"
+                              style={photoInlineButton}
+                              onClick={() => setLightboxPhoto({
+                                url: task.photo_url!,
+                                title: task.title,
+                                projectName: task.project_name || 'Без объекта',
+                                at: formatDateTime(task.updated_at || task.planned_date),
+                              })}
+                            >
+                              📷 Фото
+                            </button>
+                          ) : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            ))}</div>
-          )}
-        </section>
+            </CollapsibleSection>
 
-        {/* Analytics */}
-        <section style={grid4}>
-          <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
-          <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
-          <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
-          <div style={panel}>
-            <div style={sectionTitle}>Аналитика</div>
-            <div style={sectionSubTitle}>Короткий обзор по выбранному периоду</div>
-            <div style={summaryRow}><span>Проблемы</span><strong>{redCount}</strong></div>
-            <div style={summaryRow}><span>Риски</span><strong>{yellowCount}</strong></div>
-            <div style={summaryRow}><span>Требует внимания</span><strong>{attentionCount}</strong></div>
-          </div>
-        </section>
+            <section style={panelR}>
+              <div style={sectionTitle}>Настройки уведомлений</div>
+              <div style={sectionSubTitle}>Управление Telegram уведомлениями для вашей компании</div>
 
-        {/* Archive */}
-        <CollapsibleSection
-          title="Закрытые проблемы"
-          count={closedProblems.length}
-          storageKey="closed_issues_expanded"
-          defaultExpanded={true}
-        >
-          <div style={sectionSubTitle}>История вручную и автоматически закрытых проблем</div>
-          <div style={tableWrap}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={cellHeader}>Проблема</th>
-                  <th style={cellHeader}>Этап</th>
-                  <th style={cellHeader}>Материал</th>
-                  <th style={cellHeader}>Причина</th>
-                  <th style={cellHeader}>Ответственный</th>
-                  <th style={cellHeader}>Последнее обновление</th>
-                  <th style={cellHeader}>История</th>
-                  <th style={cellHeader}>Действие</th>
-                </tr>
-              </thead>
-              <tbody>
-                {closedProblems.length === 0 ? <tr><td style={emptyCell} colSpan={8}>Закрытых проблем пока нет</td></tr> : closedProblems.map((problem) => (
-                  <tr key={problem.id}>
-                    <td style={cellStrong}>
-                      <div>{problem.title}</div>
-                      <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                    </td>
-                    <td style={cell}>{problem.stage || 'прочее'}</td>
-                    <td style={cell}>{problem.material || 'не указан'}</td>
-                    <td style={cell}>{problem.reason || 'прочее'}</td>
-                    <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
-                    <td style={cell}>{formatDateTime(problem.last_seen_at)}</td>
-                    <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
-                    <td style={cell}>{role === 'admin' ? <button style={secondaryMiniButton} onClick={() => reopenProblem(problem.id)} disabled={reopeningId === problem.id}>{reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}</button> : null}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CollapsibleSection>
+              {settingsLoading ? (
+                <div style={emptyBox}>Загрузка настроек...</div>
+              ) : (
+                <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 900 }}>Telegram уведомления</div>
+                    <div style={toggleGroup}>
+                      <button style={telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
+                        ВКЛ
+                      </button>
+                      <button style={!telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
+                        ВЫКЛ
+                      </button>
+                    </div>
+                  </div>
 
-        <CollapsibleSection
-          title="История проблем"
-          count={filteredHistory.length}
-          storageKey="history_expanded"
-          defaultExpanded={false}
-          headerActions={(
-            <>
-              <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
-                <option value="all">Все проблемы</option>
-                {problems.map((problem) => (
-                  <option key={problem.id} value={problem.id}>{problem.project_name || 'Без проекта'} — {problem.title}</option>
-                ))}
-              </select>
-              {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
-            </>
-          )}
-        >
-          <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
-          {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
-            <div style={listWrap}>{filteredHistory.map((item) => (
-              <div key={item.id} style={listItem}>
-                <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.problem_title || 'Проблема'}</div>
-                <div style={metaLine}>{formatDateTime(item.created_at)}</div>
-                <div style={taskSummary}>{item.event}</div>
-                {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
-              </div>
-            ))}</div>
-          )}
-        </CollapsibleSection>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 900 }}>Chat ID:</div>
+                    <input
+                      style={{ ...dateInput, minWidth: 260 }}
+                      value={telegramChatId}
+                      onChange={(e) => setTelegramChatId(e.target.value)}
+                      placeholder="123456789"
+                    />
+                    <button style={secondaryButton} onClick={saveTelegramChatId} disabled={telegramSaving}>
+                      {telegramSaving ? 'Сохраняем...' : 'Сохранить'}
+                    </button>
+                  </div>
 
-        <CollapsibleSection
-          title="Сырые задачи / лента WhatsApp"
-          count={projectFilteredTasks.slice(0, 80).length}
-          storageKey="raw_tasks_expanded"
-          defaultExpanded={false}
-        >
-          <div style={sectionSubTitle}>Первичный поток сообщений. Управленческий смысл теперь в проблемах, этапах, причинах и сотрудниках.</div>
-          <div style={tableWrap}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={cellHeader}>Кто отправил</th>
-                  <th style={cellHeader}>Объект</th>
-                  <th style={cellHeader}>Задача</th>
-                  <th style={cellHeader}>Дата</th>
-                  <th style={cellHeader}>Статус</th>
-                  <th style={cellHeader}>Комментарий</th>
-                  <th style={cellHeader}>Фото</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projectFilteredTasks.slice(0, 80).map((task) => (
-                  <tr key={task.id}>
-                    <td style={cell}>{task.sender_name || 'Не указан'}</td>
-                    <td style={cell}>{task.project_name || '-'}</td>
-                    <td style={cellStrong}>{task.title}</td>
-                    <td style={cell}>{formatDate(task.updated_at || task.planned_date)}</td>
-                    <td style={cell}><span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span></td>
-                    <td style={cell}>{task.ai_summary || '-'}</td>
-                    <td style={cell}>{task.photo_url ? <a href={task.photo_url} target="_blank" rel="noreferrer" style={linkStyle}>📷 Фото</a> : '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CollapsibleSection>
-
-        <section style={panel}>
-          <div style={sectionTitle}>Настройки уведомлений</div>
-          <div style={sectionSubTitle}>Управление Telegram уведомлениями для вашей компании</div>
-
-          {settingsLoading ? (
-            <div style={emptyBox}>Загрузка настроек...</div>
-          ) : (
-            <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 900 }}>Telegram уведомления</div>
-                <div style={toggleGroup}>
-                  <button style={telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
-                    ВКЛ
-                  </button>
-                  <button style={!telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
-                    ВЫКЛ
-                  </button>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <div style={{ fontWeight: 900 }}>Уведомлять при:</div>
+                    <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                      <input type="checkbox" checked readOnly /> Проблема
+                    </label>
+                    <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                      <input type="checkbox" checked readOnly /> Риск
+                    </label>
+                  </div>
                 </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 900 }}>Chat ID:</div>
-                <input
-                  style={{ ...dateInput, minWidth: 260 }}
-                  value={telegramChatId}
-                  onChange={(e) => setTelegramChatId(e.target.value)}
-                  placeholder="123456789"
-                />
-                <button style={secondaryButton} onClick={saveTelegramChatId} disabled={telegramSaving}>
-                  {telegramSaving ? 'Сохраняем...' : 'Сохранить'}
-                </button>
-              </div>
-
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontWeight: 900 }}>Уведомлять при:</div>
-                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
-                  <input type="checkbox" checked readOnly /> Проблема
-                </label>
-                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
-                  <input type="checkbox" checked readOnly /> Риск
-                </label>
-              </div>
-            </div>
-          )}
-        </section>
+              )}
+            </section>
+          </>
+        ) : null}
       </div>
+
+      {lightboxPhoto ? (
+        <div style={lightboxOverlay} onClick={() => setLightboxPhoto(null)} role="dialog" aria-modal="true">
+          <div style={lightboxCard} onClick={(e) => e.stopPropagation()}>
+            <button type="button" style={lightboxClose} onClick={() => setLightboxPhoto(null)} aria-label="Закрыть" title="Закрыть">
+              ×
+            </button>
+            <img src={lightboxPhoto.url} alt={lightboxPhoto.title || 'Фото'} style={lightboxImage} />
+            <div style={lightboxMeta}>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>{lightboxPhoto.title || 'Фото'}</div>
+              <div style={{ ...metaLine, marginTop: 6 }}>{lightboxPhoto.projectName} · {lightboxPhoto.at}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {uiToast ? (
         <div style={toastWrap}>
@@ -1475,6 +1817,64 @@ function SummaryPanel({ title, subtitle, items }: { title: string; subtitle: str
   )
 }
 
+function ReportCard({
+  reportText,
+  problems,
+  risks,
+  ok,
+  blockers,
+}: {
+  reportText: string
+  problems: number
+  risks: number
+  ok: number
+  blockers: Problem[]
+}) {
+  const updatedAt = useMemo(() => formatDateTime(new Date().toISOString()), [])
+  const title = useMemo(() => String(reportText || '').split('\n')[0] || 'Отчёт директору', [reportText])
+
+  return (
+    <div style={reportCardWrap}>
+      <div style={reportHeaderRow}>
+        <div>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>{title}</div>
+          <div style={metaLine}>Обновлено: {updatedAt}</div>
+        </div>
+      </div>
+
+      <div style={reportKpiTable}>
+        <div style={reportKpiCellHeader}>Проблемы</div>
+        <div style={reportKpiCellHeader}>Риски</div>
+        <div style={reportKpiCellHeader}>В норме</div>
+        <div style={reportKpiCellValue}>{problems}</div>
+        <div style={reportKpiCellValue}>{risks}</div>
+        <div style={reportKpiCellValue}>{ok}</div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 950, marginBottom: 8 }}>Главные блокеры</div>
+        {blockers.length === 0 ? (
+          <div style={emptyBox}>Критичных блокеров нет</div>
+        ) : (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {blockers.map((b) => {
+              const marker = b.severity === 'red' ? '🔴' : b.severity === 'yellow' ? '🟡' : '🟡'
+              return (
+                <div key={b.id} style={reportBlockerRow}>
+                  <div style={{ fontWeight: 900 }}>
+                    {marker} <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
+                  </div>
+                  <div style={metaLine}>{b.title}</div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function severityStyle(value: Severity): CSSProperties {
   if (value === 'red') return { ...pill, background: '#fee2e2', color: '#991b1b' }
   if (value === 'yellow') return { ...pill, background: '#fef3c7', color: '#92400e' }
@@ -1511,6 +1911,12 @@ const actionRow: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center'
 const primaryButton: CSSProperties = { background: '#0f172a', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 14px', fontWeight: 700, cursor: 'pointer' }
 const secondaryButton: CSSProperties = { background: '#fff', color: '#0f172a', border: '1px solid #cbd5e1', borderRadius: 10, padding: '9px 12px', fontWeight: 700, cursor: 'pointer' }
 const reportBox: CSSProperties = { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 14, whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: 1.55, minHeight: 220 }
+const reportCardWrap: CSSProperties = { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 14, marginTop: 12 }
+const reportHeaderRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }
+const reportKpiTable: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', marginTop: 12 }
+const reportKpiCellHeader: CSSProperties = { padding: '10px 12px', background: '#fff', borderBottom: '1px solid #e2e8f0', fontWeight: 950, textAlign: 'center' as const, color: '#334155' }
+const reportKpiCellValue: CSSProperties = { padding: '12px 12px', background: '#fff', fontWeight: 950, textAlign: 'center' as const, fontSize: 18 }
+const reportBlockerRow: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 12 }
 const grid4: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginTop: 18, marginBottom: 18 }
 const mainGrid: CSSProperties = { display: 'grid', gridTemplateColumns: '360px 1fr', gap: 18, alignItems: 'start', marginBottom: 18 }
 const twoCols: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }
@@ -1530,6 +1936,16 @@ const filterButton: CSSProperties = { ...secondaryButton, padding: '8px 12px' }
 const closeButton: CSSProperties = { ...primaryButton, padding: '8px 12px' }
 const secondaryMiniButton: CSSProperties = { ...secondaryButton, padding: '7px 10px', fontSize: 12 }
 const linkStyle: CSSProperties = { color: '#0f172a', fontWeight: 800, textDecoration: 'none' }
+const photoInlineButton: CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  padding: 0,
+  margin: 0,
+  cursor: 'pointer',
+  color: '#0f172a',
+  fontWeight: 800,
+  textDecoration: 'none',
+}
 const listWrap: CSSProperties = { display: 'grid', gap: 10, marginTop: 12 }
 const listItem: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: '#fff' }
 const listTitle: CSSProperties = { fontWeight: 800, marginBottom: 4 }
@@ -1543,7 +1959,7 @@ const blockerCard: CSSProperties = { border: '1px solid #fee2e2', borderRadius: 
 const summaryRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginTop: 10 }
 const photoGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginTop: 12 }
 const photoCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, overflow: 'hidden', background: '#fff' }
-const photoLink: CSSProperties = { display: 'block' }
+const photoThumbButton: CSSProperties = { display: 'block', width: '100%', border: 'none', padding: 0, margin: 0, background: 'transparent', cursor: 'pointer' }
 const photoImage: CSSProperties = { width: '100%', height: 170, objectFit: 'cover', display: 'block' }
 const photoMeta: CSSProperties = { padding: 12 }
 const loadingBox: CSSProperties = { background: '#fff', padding: 24, borderRadius: 16, border: '1px solid #e2e8f0' }
@@ -1551,9 +1967,20 @@ const errorBox: CSSProperties = { background: '#fee2e2', color: '#991b1b', paddi
 const clientModeBox: CSSProperties = { background: '#dcfce7', color: '#166534', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #bbf7d0', fontWeight: 700 }
 const warningBox: CSSProperties = { background: '#fef3c7', color: '#92400e', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #fde68a', fontWeight: 700 }
 const highlightedRow: CSSProperties = { background: '#fef9c3' }
-const actionsCol: CSSProperties = { display: 'grid', gap: 6, minWidth: 170 }
-const actionChip: CSSProperties = { background: '#fff', border: '1px solid #cbd5e1', borderRadius: 10, padding: '7px 10px', fontWeight: 800, cursor: 'pointer', fontSize: 12 }
-const actionChipDanger: CSSProperties = { ...actionChip, border: '1px solid #fecaca', background: '#fff7f7', color: '#991b1b' }
+const actionsRow: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', minWidth: 110 }
+const actionIconButton: CSSProperties = {
+  background: '#fff',
+  border: '1px solid #cbd5e1',
+  borderRadius: 10,
+  fontWeight: 900,
+  cursor: 'pointer',
+  fontSize: 18,
+  lineHeight: 1,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
+const actionIconButtonDanger: CSSProperties = { ...actionIconButton, border: '1px solid #fecaca', background: '#fff7f7', color: '#991b1b' }
 const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
 const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
 const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
@@ -1566,6 +1993,11 @@ const groupHeaderButton: CSSProperties = { width: '100%', textAlign: 'left' as c
 const badgeRow: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }
 const countBadgeRed: CSSProperties = { ...smallPill, background: '#fee2e2', color: '#991b1b' }
 const countBadgeYellow: CSSProperties = { ...smallPill, background: '#fef3c7', color: '#92400e' }
+
+const personCellWrap: CSSProperties = { position: 'relative', display: 'inline-block' }
+const personButton: CSSProperties = { background: 'transparent', border: 'none', padding: 0, margin: 0, cursor: 'pointer', fontWeight: 900, color: '#0f172a', textAlign: 'left' as const }
+const personTooltip: CSSProperties = { position: 'absolute', top: 'calc(100% + 8px)', left: 0, width: 220, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, boxShadow: '0 10px 28px rgba(15,23,42,.14)', zIndex: 40 }
+const callLink: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a', fontWeight: 900, textDecoration: 'none' }
 
 function eventLabel(type: EventsFilter) {
   if (type === 'problems') return 'Проблемы'
@@ -1585,3 +2017,13 @@ const modalCard: CSSProperties = { width: 'min(760px, 100%)', maxHeight: '82vh',
 const modalHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 12 }
 const modalList: CSSProperties = { display: 'grid', gap: 10 }
 const authChip: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: 999, background: '#fff', fontWeight: 800, color: '#334155' }
+
+const lightboxOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14 }
+const lightboxCard: CSSProperties = { position: 'relative', width: 'min(1100px, 90vw)', maxHeight: '85vh', display: 'grid', gap: 12 }
+const lightboxClose: CSSProperties = { position: 'absolute', right: 0, top: 0, width: 44, height: 44, borderRadius: 12, border: '1px solid rgba(255,255,255,.25)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 28, lineHeight: 1, fontWeight: 800 }
+const lightboxImage: CSSProperties = { width: '100%', maxHeight: '85vh', objectFit: 'contain', borderRadius: 12, display: 'block' }
+const lightboxMeta: CSSProperties = { color: '#fff', padding: '0 4px' }
+
+const tabsWrap: CSSProperties = { display: 'flex', gap: 10, marginTop: 14, marginBottom: 14, overflowX: 'auto', paddingBottom: 6 }
+const tabButton: CSSProperties = { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 12, padding: '10px 12px', fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }
+const tabActive: CSSProperties = { ...tabButton, background: '#0f172a', color: '#fff', border: '1px solid #0f172a' }
