@@ -31,6 +31,7 @@ type Problem = {
   first_seen_at: string | null
   last_seen_at: string | null
   closed_at?: string | null
+  watched?: boolean | null
   days_count: number | null
   is_active: boolean | null
   project_name: string | null
@@ -168,6 +169,7 @@ export default function Page() {
   const [selectedProblemForHistory, setSelectedProblemForHistory] = useState<string>('all')
   const [historyModalProblem, setHistoryModalProblem] = useState<Problem | null>(null)
   const [highlightedIssueId, setHighlightedIssueId] = useState<string | null>(null)
+  const [watchedLocalIds, setWatchedLocalIds] = useState<Record<string, boolean>>({})
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
   const [uiToast, setUiToast] = useState<string | null>(null)
@@ -688,7 +690,7 @@ export default function Page() {
 
   const blockers = useMemo(() => {
     return activeProblemsBase
-      .filter((item) => item.severity === 'red' || Number(item.days_count || 0) >= 3)
+      .filter((item) => item.severity === 'red')
       .sort((a, b) => Number(b.days_count || 0) - Number(a.days_count || 0))
       .slice(0, 5)
   }, [activeProblemsBase])
@@ -862,6 +864,14 @@ export default function Page() {
     return `+${digits}`
   }
 
+  function sanitizeJournalComment(value: string | null | undefined) {
+    const raw = String(value || '')
+    if (!raw) return ''
+    const cut = raw.split('KEY:')[0]
+    const cleaned = cut.replace(/Материал:\s*не указан/gi, '').trim()
+    return cleaned
+  }
+
   function handlePersonClick(id: string, phone: string) {
     if (!phone) return
     if (isMobile) {
@@ -952,43 +962,20 @@ export default function Page() {
   }
 
   async function closeProblem(problemId: string) {
-    const current = problems.find((p) => p.id === problemId)
-    if (!current) return
-
     try {
       setClosingId(problemId)
       const { error } = await supabase
         .from('problems')
         .update({
-          status: 'closed',
+          is_active: false,
           closed_at: new Date().toISOString(),
         })
         .eq('id', problemId)
+        .eq('company_id', companyId)
 
-      if (error) throw error
-
-      await supabase.from('problem_history').insert([
-        {
-          problem_id: problemId,
-          event: 'Проблема закрыта вручную',
-          project_name: current.project_name,
-          problem_title: current.title,
-          comment: 'Закрыто через панель директора',
-        },
-      ])
-
-      setProblems((prev) =>
-        prev.map((p) =>
-          p.id === problemId
-            ? ({
-                ...p,
-                status: 'closed',
-                is_active: false,
-                last_seen_at: new Date().toISOString(),
-              } as Problem)
-            : p
-        )
-      )
+      if (!error) {
+        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      }
     } catch (err) {
       console.error('Ошибка закрытия проблемы:', err)
     } finally {
@@ -997,47 +984,50 @@ export default function Page() {
   }
 
   async function reopenProblem(problemId: string) {
-    const current = problems.find((p) => p.id === problemId)
-    if (!current) return
-
     try {
       setReopeningId(problemId)
       const { error } = await supabase
         .from('problems')
         .update({
-          status: 'open',
+          is_active: true,
           closed_at: null,
         })
         .eq('id', problemId)
+        .eq('company_id', companyId)
 
-      if (error) throw error
-
-      await supabase.from('problem_history').insert([
-        {
-          problem_id: problemId,
-          event: 'Проблема переоткрыта вручную',
-          project_name: current.project_name,
-          problem_title: current.title,
-          comment: 'Переоткрыто через панель директора',
-        },
-      ])
-
-      setProblems((prev) =>
-        prev.map((p) =>
-          p.id === problemId
-            ? ({
-                ...p,
-                status: 'open',
-                is_active: true,
-                last_seen_at: new Date().toISOString(),
-              } as Problem)
-            : p
-        )
-      )
+      if (!error) {
+        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      }
     } catch (err) {
       console.error('Ошибка переоткрытия проблемы:', err)
     } finally {
       setReopeningId(null)
+    }
+  }
+
+  async function watchProblem(problemId: string) {
+    try {
+      const { error } = await supabase
+        .from('problems')
+        .update({ watched: true })
+        .eq('id', problemId)
+        .eq('company_id', companyId)
+
+      if (!error) {
+        setProblems((prev) => prev.map((p) => (p.id === problemId ? ({ ...p, watched: true } as Problem) : p)))
+        return
+      }
+
+      const msg = String((error as any)?.message || '')
+      if (msg.toLowerCase().includes('watched') && msg.toLowerCase().includes('column')) {
+        setWatchedLocalIds((cur) => ({ ...cur, [problemId]: true }))
+        return
+      }
+
+      console.error('watchProblem error:', error)
+    } catch (e) {
+      console.error('watchProblem failed:', e)
+      setWatchedLocalIds((cur) => ({ ...cur, [problemId]: true }))
     }
   }
 
@@ -1359,7 +1349,14 @@ export default function Page() {
                     {filteredProblems.length === 0 ? (
                       <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
                     ) : filteredProblems.map((problem) => (
-                      <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                      <tr
+                        key={problem.id}
+                        id={`problem-${problem.id}`}
+                        style={{
+                          ...(highlightedIssueId === problem.id ? highlightedRow : undefined),
+                          ...(Boolean(problem.watched) || Boolean(watchedLocalIds[problem.id]) ? watchedRow : undefined),
+                        }}
+                      >
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
@@ -1412,10 +1409,10 @@ export default function Page() {
                           <div style={actionsRow}>
                             <button
                               type="button"
-                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(Boolean(problem.watched) || Boolean(watchedLocalIds[problem.id]) ? watchedIcon : {}) }}
                               title="Взять на контроль"
                               aria-label="Взять на контроль"
-                              onClick={() => showToast('UI: Взято на контроль')}
+                              onClick={() => watchProblem(problem.id)}
                             >
                               👁
                             </button>
@@ -1431,12 +1428,12 @@ export default function Page() {
                             <button
                               type="button"
                               style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
-                              title="Закрыть"
+                              title="Закрыть проблему"
                               aria-label="Закрыть"
                               onClick={() => closeProblem(problem.id)}
                               disabled={closingId === problem.id}
                             >
-                              ✓
+                              ✕
                             </button>
                           </div>
                         </td>
@@ -1888,7 +1885,7 @@ export default function Page() {
                         <td style={cellStrong}>{task.title}</td>
                         <td style={cell}>{formatDate(task.updated_at || task.planned_date)}</td>
                         <td style={cell}><span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span></td>
-                        <td style={cell}>{task.ai_summary || '-'}</td>
+                        <td style={cell}>{sanitizeJournalComment(task.ai_summary) || '-'}</td>
                         <td style={cell}>
                           {task.photo_url ? (
                             <button
@@ -2206,23 +2203,37 @@ function ReportCard({
 
       <div style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 950, marginBottom: 8 }}>Главные блокеры</div>
-        {blockers.length === 0 ? (
-          <div style={emptyBox}>Критичных блокеров нет</div>
-        ) : (
-          <div style={{ display: 'grid', gap: 8 }}>
-            {blockers.map((b) => {
-              const marker = b.severity === 'red' ? '🔴' : b.severity === 'yellow' ? '🟡' : '🟡'
-              return (
+        {blockers.length === 0 ? <div style={emptyBox}>Критичных блокеров нет</div> : null}
+
+        {blockers.filter((b) => b.severity === 'red').length ? (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontWeight: 950, marginBottom: 8 }}>🔴 Проблемы:</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {blockers.filter((b) => b.severity === 'red').map((b) => (
                 <div key={b.id} style={reportBlockerRow}>
                   <div style={{ fontWeight: 900 }}>
-                    {marker} <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
+                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
                   </div>
-                  <div style={metaLine}>{b.title}</div>
                 </div>
-              )
-            })}
+              ))}
+            </div>
           </div>
-        )}
+        ) : null}
+
+        {blockers.filter((b) => b.severity === 'yellow').length ? (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 950, marginBottom: 8 }}>🟡 Риски:</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {blockers.filter((b) => b.severity === 'yellow').map((b) => (
+                <div key={b.id} style={reportBlockerRow}>
+                  <div style={{ fontWeight: 900 }}>
+                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -2336,6 +2347,8 @@ const actionIconButton: CSSProperties = {
   justifyContent: 'center',
 }
 const actionIconButtonDanger: CSSProperties = { ...actionIconButton, border: '1px solid #fecaca', background: '#fff7f7', color: '#991b1b' }
+const watchedRow: CSSProperties = { borderLeft: '3px solid #2563EB' }
+const watchedIcon: CSSProperties = { color: '#2563EB', borderColor: '#93c5fd' }
 const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
 const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
 const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
