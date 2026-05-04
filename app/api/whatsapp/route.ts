@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server.js'
 import { createClient } from '@supabase/supabase-js'
 
 export const runtime = 'nodejs'
@@ -10,6 +10,9 @@ type ParsedState = {
   kind: Kind
   color: Color
   summary: string
+  confidence: 'high' | 'medium' | 'low'
+  matchedKeywords: string[]
+  reason: string
 }
 
 function getSupabase() {
@@ -108,12 +111,49 @@ const DONE_PHRASES = [
   'работы приняты', 'объект сдан',
   'завезли', 'выгрузили', 'разгрузили',
   'материал получен', 'материал на объекте',
+  // KZ / mixed
+  'дайын',
+  'бітті', 'битти',
+  'жасалды',
+  'аяқталды', 'аякталды',
+  'орындалды',
+  'әкелді', 'акелди',
+  'келді', 'келди',
+  'түзетілді', 'тузетилди',
+  'қабылданды', 'кабылданды',
+  'бәрі дұрыс', 'бари дурыс',
+  'мәселе жоқ', 'маселе жок',
+  'бетон келди готово',
+  'жумыс битти',
+  'фасад жасалды',
+  'материал келди начинаем',
+  // Normative
+  'работы выполнены',
+  'работы завершены',
+  'акт подписан',
+  'замечания устранены',
+  'нарушение устранено',
+  'дефект устранен', 'дефект устранён',
+  'повреждение устранено',
+  'протечка устранена',
+  'течь устранена',
+  'трещина заделана',
+  'испытание пройдено',
+  'проверка пройдена',
+  'технадзор принял',
+  'заказчик принял',
+  'соответствует проекту',
+  'соответствует требованиям',
+  'электроснабжение восстановлено',
+  'водоснабжение восстановлено',
+  'работоспособность восстановлена',
 ]
 
 const RED_PHRASES = [
   'не успели', 'срыв', 'сорвали', 'просрочка', 'просрочено',
   'не закончили', 'не завершили', 'остановили', 'остановка',
   'встали', 'простой', 'не вышли', 'нет людей', 'нет рабочих',
+  'нет бетона',
   'не привезли', 'не залили', 'не сделали', 'не смонтировали',
   'не установили', 'не подключили', 'не выполнили', 'не готово',
   'не доделали', 'не доделал', 'не доделана', 'не доделано', 'не доделаны',
@@ -142,6 +182,69 @@ const RED_PHRASES = [
   // Критические задержки
   'поставка сорвана', 'материал не привезут',
   'поставщик подвёл', 'поставщик подвел',
+  // KZ / mixed (нет/жок)
+  'жоқ', 'жок',
+  'материал жоқ', 'материал жок',
+  'бетон жоқ', 'бетон жок',
+  'адам жоқ', 'адам жок',
+  'бригада жоқ', 'бригада жок',
+  'техника жоқ', 'техника жок',
+  'кран жоқ', 'кран жок',
+  'су жоқ', 'су жок',
+  'ток жоқ', 'ток жок',
+  'тоқ жоқ', 'тоқ жок',
+  'келмеді', 'келмеди',
+  'әкелмеді', 'акелмеди',
+  'бітпеді', 'битпеди',
+  'жасалмады', 'жасамады',
+  'үлгермедік', 'улгермедик',
+  'кешікті', 'кешикти',
+  'тоқтап тұр', 'токтап тур',
+  'жұмыс тоқтады', 'жумыс токтады',
+  'сынды', 'бұзылды', 'бузылды',
+  'ақау', 'акау', 'қате', 'кате',
+  'жарық', 'жарык',
+  'бетон жоқ работы стоят',
+  'адам жоқ не вышли',
+  'арматура келмеди',
+  'материал жок задержка',
+  'бригада жок сегодня',
+  // Normative
+  'аварийная ситуация', 'аварийное состояние',
+  'аварийное отключение',
+  'чрезвычайная ситуация',
+  'угроза безопасности',
+  'повреждение конструкции',
+  'частичное разрушение', 'полное разрушение',
+  'обрушение',
+  'деформация конструкции',
+  'дефект конструкции', 'критический дефект',
+  'скрытый дефект',
+  'работоспособность нарушена',
+  'отказ оборудования', 'отказ системы',
+  'сквозная трещина', 'трещинообразование',
+  'затопление', 'увлажнение',
+  'коррозия арматуры',
+  'коррозионное повреждение',
+  'отключение электроснабжения',
+  'повреждение кабеля',
+  'повреждение трубопровода',
+  'авария водоснабжения',
+  'авария канализации',
+  'авария теплоснабжения',
+  'пожар', 'загорание', 'возгорание',
+  'не соответствует проекту',
+  'не соответствует нормам',
+  'нарушение технологии',
+  'нарушение требований',
+  'технадзор не принял',
+  'заказчик не принял',
+  'предписание',
+  // Slang
+  'накосячили', 'затык', 'всё стоит',
+  'завал', 'облом', 'переделывать',
+  'разобрать и заново', 'не вывезли',
+  'не тянем', 'застряли', 'подвисли',
 ]
 
 const YELLOW_PHRASES = [
@@ -165,7 +268,58 @@ const YELLOW_PHRASES = [
   'нет согласования', 'ждём разрешения',
   'ждем разрешения', 'нет проекта',
   'нет чертежей',
+  // KZ / mixed
+  'қауіп бар', 'кауип бар',
+  'мүмкін кешігеміз', 'мумкин кешигемиз',
+  'күтіп отырмыз', 'кутип отырмыз',
+  'тексеру керек',
+  'анық емес', 'анык емес',
+  'сұрақ бар', 'сурак бар',
+  'келсе жасаймыз',
+  'ауа райы кедергі',
+  'ауа райы мешает',
+  'материал күтіп', 'материал кутип',
+  // Normative
+  'требуется проверка',
+  'требуется контроль',
+  'нужен осмотр',
+  'нужна диагностика',
+  'нужен замер',
+  'нужно обследование',
+  'нужно испытание',
+  'есть отклонение',
+  'отклонение от проекта',
+  'отклонение от графика',
+  'вероятность задержки',
+  'риск повреждения',
+  'риск деформации',
+  'риск протечки',
+  'риск аварии',
+  'риск отказа',
+  'потенциальная опасность',
+  'техническое состояние неясно',
+  'состояние требует оценки',
+  'ожидаем технадзор',
+  'ожидаем акт',
 ]
+
+const HARD_GREEN_CLOSE_PATTERNS = [
+  'проблему устранили',
+  'замечания устранили',
+  'вопрос закрыли',
+  'течь устранили',
+  'протечку устранили',
+  'переделали готово',
+  'доделали готово',
+  'исправили готово',
+  'дефект исправили',
+  'трещину заделали',
+]
+
+function isHardGreenClose(normalizedText: string): boolean {
+  const raw = String(normalizedText || '')
+  return HARD_GREEN_CLOSE_PATTERNS.some((p) => raw.includes(normalizeForMatch(p)))
+}
 
 const STAGE_RULES: { stage: string; parts: string[] }[] = [
   { stage: 'фундамент', parts: ['фундамент', 'сваи', 'ростверк', 'котлован', 'подбетон', 'подбетонка', 'плита', 'монолитная плита', 'ленточный', 'буронабивные', 'забивные', 'шпунт', 'гидроизоляция фундамента', 'дренаж', 'щебёночная подготовка', 'щебеночная подготовка', 'песчаная подушка', 'бетонирование'] },
@@ -318,12 +472,16 @@ function detectYellowByMeaning(text: string) {
 
 function detectState(text: string): ParsedState {
   const raw = normalizeForMatch(text)
+  const wordCount = raw.trim() ? raw.trim().split(/\s+/).length : 0
 
-  const done = includesAny(raw, DONE_PHRASES)
-  const red = includesAny(raw, RED_PHRASES)
-  const yellow = includesAny(raw, YELLOW_PHRASES) || detectYellowByMeaning(raw)
+  const matchedRed = RED_PHRASES.filter((p) => raw.includes(normalizeForMatch(p)))
+  const matchedYellow = YELLOW_PHRASES.filter((p) => raw.includes(normalizeForMatch(p)))
+  const matchedGreen = DONE_PHRASES.filter((p) => raw.includes(normalizeForMatch(p)))
 
-  // Negative должен побеждать DONE, кроме явно закрывающих формулировок.
+  const done = matchedGreen.length > 0
+  const red = matchedRed.length > 0
+  const yellow = matchedYellow.length > 0 || detectYellowByMeaning(raw)
+
   const NOT_VERB_PATTERN = /не\s+(залили|уложили|забетонировали|смонтировали|установили|подключили|завершили|закончили|сделали|выполнили|привезли|доставили|закрыли|сдали|приняли|зашли|вышли|начали|приступили|приехали|пришли|подписали|сдали|укрыли|утеплили|покрасили|заштукатурили|залили|забили|вбили|забетонировали)/
   const hasNegativeSignals =
     raw.includes('нет материала') ||
@@ -342,14 +500,6 @@ function detectState(text: string): ParsedState {
     NOT_VERB_PATTERN.test(raw) ||
     red ||
     yellow
-
-  const isExplicitClosing =
-    raw.includes('привезли готово') ||
-    raw.includes('сделали готово') ||
-    raw.includes('устранил') ||
-    raw.includes('устранили') ||
-    raw.includes('закрыли') ||
-    raw.includes('завершили')
 
   const stage = detectStage(raw)
   const material = detectMaterial(raw)
@@ -371,15 +521,108 @@ function detectState(text: string): ParsedState {
     stage !== 'прочее' &&
     (reason !== 'прочее' || material !== 'не указан' || raw.includes('материал') || raw.includes('задерж') || raw.includes('риск'))
 
-  if (hasNegativeSignals && !isExplicitClosing) {
-    if (red || hasShortCriticalContext) return { kind: 'problem', color: 'red', summary: 'Срыв сроков' }
-    if (yellow || hasShortIssueContext) return { kind: 'risk', color: 'yellow', summary: 'Есть риск' }
-    return { kind: 'risk', color: 'yellow', summary: 'Есть риск' }
+  const redConfidence: 'high' | 'medium' | 'low' =
+    matchedRed.length >= 2 || wordCount >= 10 ? 'high' : matchedRed.length === 1 || wordCount >= 5 ? 'medium' : 'low'
+  const yellowConfidence: 'high' | 'medium' | 'low' =
+    matchedYellow.length >= 2 || wordCount >= 10 ? 'high' : matchedYellow.length === 1 || wordCount >= 5 ? 'medium' : 'low'
+  const greenConfidence: 'high' | 'medium' | 'low' =
+    matchedGreen.length >= 2 || wordCount >= 10 ? 'high' : matchedGreen.length === 1 || wordCount >= 5 ? 'medium' : 'low'
+
+  let result: ParsedState
+
+  // Жёсткий приоритет RED над всем
+  if (red || hasShortCriticalContext) {
+    // Исключение: явное закрытие старой проблемы без новых признаков срыва
+    if (isHardGreenClose(raw) && !red && !hasShortCriticalContext) {
+      result = {
+        kind: 'done',
+        color: 'green',
+        summary: 'Проблема закрыта',
+        confidence: greenConfidence,
+        matchedKeywords: [...matchedGreen],
+        reason: 'Hard green close pattern',
+      }
+    } else {
+      result = {
+        kind: 'problem',
+        color: 'red',
+        summary: 'Срыв сроков',
+        confidence: redConfidence,
+        matchedKeywords: [...matchedRed],
+        reason: red ? 'Matched RED_PHRASES' : 'Short critical context',
+      }
+    }
+  } else if (yellow || hasShortIssueContext) {
+    // YELLOW второй приоритет
+    result = {
+      kind: 'risk',
+      color: 'yellow',
+      summary: 'Есть риск',
+      confidence: yellowConfidence,
+      matchedKeywords: [...matchedYellow],
+      reason: yellow ? 'Matched YELLOW_PHRASES / meaning' : 'Short issue context',
+    }
+  } else if (done || isHardGreenClose(raw)) {
+    // GREEN только если нет никаких негативных сигналов
+    if (greenConfidence === 'low' && !red && !yellow) {
+      result = {
+        kind: 'risk',
+        color: 'yellow',
+        summary: 'Требует проверки',
+        confidence: 'low',
+        matchedKeywords: [],
+        reason: 'Короткое сообщение без явного статуса',
+      }
+    } else {
+      result = {
+        kind: 'done',
+        color: 'green',
+        summary: 'Работы завершены',
+        confidence: greenConfidence,
+        matchedKeywords: [...matchedGreen],
+        reason: done ? 'Matched DONE_PHRASES' : 'Hard green close pattern',
+      }
+    }
+  } else if (wordCount < 10) {
+    // Короткое неясное сообщение → YELLOW, не GREEN
+    result = {
+      kind: 'risk',
+      color: 'yellow',
+      summary: 'Требует проверки',
+      confidence: 'low',
+      matchedKeywords: [],
+      reason: 'Короткое сообщение без явного статуса',
+    }
+  } else {
+    result = {
+      kind: 'normal',
+      color: 'green',
+      summary: 'Всё по плану',
+      confidence: 'medium',
+      matchedKeywords: [],
+      reason: 'No negative signals and no explicit done',
+    }
   }
 
-  if (done) return { kind: 'done', color: 'green', summary: 'Работы завершены' }
+  console.log('FIXBUILD_CLASSIFIER_DEBUG', {
+    incomingText: String(text || '').slice(0, 200),
+    normalizedText: raw.slice(0, 200),
+    finalSeverity: result.color,
+    confidence: result.confidence,
+    matchedKeywords: result.matchedKeywords,
+    reason: result.reason,
+    wordCount,
+    hasNegative: hasNegativeSignals,
+    hasDone: done,
+    stage,
+    projectName: null,
+  })
 
-  return { kind: 'normal', color: 'green', summary: 'Всё по плану' }
+  return result
+}
+
+export function __detectStateForTest(text: string) {
+  return detectState(text)
 }
 
 function buildProblemKey(projectName: string, stage: string, _reason: string, _material: string) {
@@ -1387,16 +1630,16 @@ export async function POST(req: NextRequest) {
     let title = incomingText
     let parsed: ParsedState = incomingText
       ? detectState(incomingText)
-      : { kind: 'normal', color: 'green', summary: 'Сообщение получено' }
+      : { kind: 'normal', color: 'green', summary: 'Сообщение получено', confidence: 'low', matchedKeywords: [], reason: 'Empty message' }
 
     if (!incomingText && type === 'audioMessage') {
       title = '[Голосовое сообщение]'
-      parsed = { kind: 'risk', color: 'yellow', summary: 'Ожидает расшифровки' }
+      parsed = { kind: 'risk', color: 'yellow', summary: 'Ожидает расшифровки', confidence: 'low', matchedKeywords: [], reason: 'Audio without text' }
     }
 
     if (!incomingText && getMediaInfo(body).isImage) {
       title = '[Фото]'
-      parsed = { kind: 'normal', color: 'green', summary: 'Фото получено' }
+      parsed = { kind: 'normal', color: 'green', summary: 'Фото получено', confidence: 'low', matchedKeywords: [], reason: 'Photo without text' }
     }
 
     if (!title) {
@@ -1483,6 +1726,19 @@ export async function POST(req: NextRequest) {
     }
 
     console.log('WHATSAPP PARSED:', { title, projectName, stage, reason, material, parsed, senderName })
+    console.log('FIXBUILD_CLASSIFIER_DEBUG', {
+      incomingText: String(title || '').slice(0, 200),
+      normalizedText: normalizeForMatch(title || '').slice(0, 200),
+      finalSeverity: parsed.color,
+      confidence: parsed.confidence,
+      matchedKeywords: parsed.matchedKeywords,
+      reason: parsed.reason,
+      wordCount: normalizeForMatch(title || '').trim() ? normalizeForMatch(title || '').trim().split(/\s+/).length : 0,
+      hasNegative: parsed.color === 'red' || parsed.color === 'yellow',
+      hasDone: parsed.color === 'green' && parsed.kind === 'done',
+      stage,
+      projectName,
+    })
 
     try {
       if (parsed.kind === 'done' || parsed.color === 'green' || isClosingByText(title)) {
