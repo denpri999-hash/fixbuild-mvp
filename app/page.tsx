@@ -145,11 +145,9 @@ export default function Page() {
   const { companyId, loading: companyLoading } = useCompany()
 
   const [isMobile, setIsMobile] = useState(false)
-  const [lightboxPhoto, setLightboxPhoto] = useState<{
-    url: string
-    title: string
-    projectName: string
-    at: string
+  const [lightbox, setLightbox] = useState<{
+    index: number
+    items: Array<{ url: string; title: string; projectName: string; at: string }>
   } | null>(null)
 
   const [tasks, setTasks] = useState<Task[]>([])
@@ -199,6 +197,9 @@ export default function Page() {
   const [deadlineEditingId, setDeadlineEditingId] = useState<string | null>(null)
   const [deadlineDraft, setDeadlineDraft] = useState<string>('')
   const [updateModal, setUpdateModal] = useState<{ title: string; text: string } | null>(null)
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false)
+  const [tgEnabledLocal, setTgEnabledLocal] = useState(false)
+  const [tgChatIdLocal, setTgChatIdLocal] = useState('')
 
   async function fetchTasks() {
     let query = supabase
@@ -450,13 +451,39 @@ export default function Page() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!lightboxPhoto) return
+    if (!lightbox) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLightboxPhoto(null)
+      if (e.key === 'Escape') setLightbox(null)
+      if (e.key === 'ArrowLeft') {
+        setLightbox((cur) => {
+          if (!cur) return cur
+          const next = (cur.index - 1 + cur.items.length) % cur.items.length
+          return { ...cur, index: next }
+        })
+      }
+      if (e.key === 'ArrowRight') {
+        setLightbox((cur) => {
+          if (!cur) return cur
+          const next = (cur.index + 1) % cur.items.length
+          return { ...cur, index: next }
+        })
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [lightboxPhoto])
+  }, [lightbox])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const enabled = window.localStorage.getItem('tg_enabled')
+      const chat = window.localStorage.getItem('tg_chat_id')
+      setTgEnabledLocal(enabled === '1')
+      setTgChatIdLocal(chat || '')
+    } catch {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -741,14 +768,18 @@ export default function Page() {
     return scoped.filter((h) => isInsideDateRange(h.created_at, dateFrom, dateTo)).slice(0, 25)
   }, [history, selectedProject, selectedProblemForHistory, dateFrom, dateTo, companyId, visibleProjectNames])
 
+  const historyForTabBase = useMemo(() => {
+    return history.filter((h) => isInsideDateRange(h.created_at, dateFrom, dateTo))
+  }, [history, dateFrom, dateTo])
+
   const historyProjectOptions = useMemo(() => {
     const set = new Set<string>()
-    filteredHistory.forEach((h) => set.add((h.project_name || 'Без объекта').trim() || 'Без объекта'))
+    historyForTabBase.forEach((h) => set.add((h.project_name || 'Без объекта').trim() || 'Без объекта'))
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
-  }, [filteredHistory])
+  }, [historyForTabBase])
 
   const historyGrouped = useMemo(() => {
-    const scoped = filteredHistory
+    const scoped = historyForTabBase
       .map((h) => {
         const projectName = (h.project_name || 'Без объекта').trim() || 'Без объекта'
         const problem = h.problem_id ? problemsById.get(h.problem_id) : undefined
@@ -773,7 +804,7 @@ export default function Page() {
       .sort((a, b) => a.stageName.localeCompare(b.stageName, 'ru'))
 
     return stages
-  }, [filteredHistory, problemsById, historyProjectFilter, historyEventFilter])
+  }, [historyForTabBase, problemsById, historyProjectFilter, historyEventFilter])
 
   const modalHistory = useMemo(() => {
     if (!historyModalProblem) return []
@@ -1149,6 +1180,9 @@ export default function Page() {
             <div style={{ width: '100%', display: 'grid', gap: 10 }}>
               <div style={mobileHeaderRow}>
                 <h1 style={mobileHeaderTitle}>FixBuild</h1>
+                <button type="button" style={secondaryMiniButton} onClick={() => setSettingsModalOpen(true)}>
+                  ⚙ Настройки
+                </button>
                 <select style={mobileProjectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
                   <option value="all">Все объекты</option>
                   {projects.map((project) => (
@@ -1201,6 +1235,7 @@ export default function Page() {
               </div>
 
               <div style={filtersRowR}>
+                <button type="button" style={secondaryButton} onClick={() => setSettingsModalOpen(true)}>⚙ Настройки</button>
                 <select style={projectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
                   <option value="all">Все объекты</option>
                   {projects.map((project) => (
@@ -1270,7 +1305,7 @@ export default function Page() {
           )}
         >
           <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
-          <ReportCard reportText={reportText} problems={redCount} risks={yellowCount} ok={greenCount} blockers={blockers} />
+          <ReportCard reportText={reportText} problems={redCount} risks={yellowCount} ok={greenCount} blockers={blockers} durationDays={durationDays} />
         </CollapsibleSection>
 
         {/* Alert */}
@@ -1532,11 +1567,14 @@ export default function Page() {
                             <button
                               type="button"
                               style={photoInlineButton}
-                              onClick={() => setLightboxPhoto({
-                                url: problem.photo_url!,
-                                title: problem.title,
-                                projectName: problem.project_name || 'Без объекта',
-                                at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                              onClick={() => setLightbox({
+                                index: 0,
+                                items: [{
+                                  url: problem.photo_url!,
+                                  title: problem.title,
+                                  projectName: problem.project_name || 'Без объекта',
+                                  at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                }],
                               })}
                             >
                               📷 Фото
@@ -1663,11 +1701,14 @@ export default function Page() {
                                                 <button
                                                   type="button"
                                                   style={photoInlineButton}
-                                                  onClick={() => setLightboxPhoto({
-                                                    url: problem.photo_url!,
-                                                    title: problem.title,
-                                                    projectName: problem.project_name || 'Без объекта',
-                                                    at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                  onClick={() => setLightbox({
+                                                    index: 0,
+                                                    items: [{
+                                                      url: problem.photo_url!,
+                                                      title: problem.title,
+                                                      projectName: problem.project_name || 'Без объекта',
+                                                      at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                    }],
                                                   })}
                                                 >
                                                   📷 Фото
@@ -1703,11 +1744,14 @@ export default function Page() {
                                                       <button
                                                         type="button"
                                                         style={photoInlineButton}
-                                                        onClick={() => setLightboxPhoto({
-                                                          url: problem.photo_url!,
-                                                          title: problem.title,
-                                                          projectName: problem.project_name || 'Без объекта',
-                                                          at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                        onClick={() => setLightbox({
+                                                          index: 0,
+                                                          items: [{
+                                                            url: problem.photo_url!,
+                                                            title: problem.title,
+                                                            projectName: problem.project_name || 'Без объекта',
+                                                            at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                          }],
                                                         })}
                                                       >
                                                         📷 Фото
@@ -1835,12 +1879,16 @@ export default function Page() {
                   <button
                     type="button"
                     style={photoThumbButton}
-                    onClick={() => setLightboxPhoto({
-                      url: item.photo_url,
-                      title: item.problem_title || 'Фото',
-                      projectName: item.project_name || 'Без объекта',
-                      at: formatDateTime(item.created_at),
-                    })}
+                    onClick={() => {
+                      const items = filteredMedia.map((m) => ({
+                        url: m.photo_url,
+                        title: m.problem_title || 'Фото',
+                        projectName: m.project_name || 'Без объекта',
+                        at: formatDateTime(m.created_at),
+                      }))
+                      const index = Math.max(0, items.findIndex((x) => x.url === item.photo_url))
+                      setLightbox({ index, items })
+                    }}
                     aria-label="Открыть фото"
                     title="Открыть фото"
                   >
@@ -2048,20 +2096,23 @@ export default function Page() {
                         <td style={cell}><span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span></td>
                         <td style={cell}>{sanitizeJournalComment(task.ai_summary) || '-'}</td>
                         <td style={cell}>
-                          {task.photo_url ? (
-                            <button
-                              type="button"
-                              style={photoInlineButton}
-                              onClick={() => setLightboxPhoto({
-                                url: task.photo_url!,
-                                title: task.title,
-                                projectName: task.project_name || 'Без объекта',
-                                at: formatDateTime(task.updated_at || task.planned_date),
-                              })}
-                            >
-                              📷 Фото
-                            </button>
-                          ) : '-'}
+                      {task.photo_url ? (
+                        <button
+                          type="button"
+                          style={photoInlineButton}
+                          onClick={() => setLightbox({
+                            index: 0,
+                            items: [{
+                              url: task.photo_url!,
+                              title: task.title,
+                              projectName: task.project_name || 'Без объекта',
+                              at: formatDateTime(task.updated_at || task.planned_date),
+                            }],
+                          })}
+                        >
+                          📷 Фото
+                        </button>
+                      ) : '-'}
                         </td>
                       </tr>
                     ))}
@@ -2070,65 +2121,49 @@ export default function Page() {
               </div>
             </CollapsibleSection>
 
-            <section style={panelR}>
-              <div style={sectionTitle}>Настройки уведомлений</div>
-              <div style={sectionSubTitle}>Управление Telegram уведомлениями для вашей компании</div>
-
-              {settingsLoading ? (
-                <div style={emptyBox}>Загрузка настроек...</div>
-              ) : (
-                <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                    <div style={{ fontWeight: 900 }}>Telegram уведомления</div>
-                    <div style={toggleGroup}>
-                      <button style={telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
-                        ВКЛ
-                      </button>
-                      <button style={!telegramEnabled ? toggleActive : toggleButton} onClick={toggleTelegramEnabled} disabled={telegramSaving}>
-                        ВЫКЛ
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ fontWeight: 900 }}>Chat ID:</div>
-                    <input
-                      style={{ ...dateInput, minWidth: 260 }}
-                      value={telegramChatId}
-                      onChange={(e) => setTelegramChatId(e.target.value)}
-                      placeholder="123456789"
-                    />
-                    <button style={secondaryButton} onClick={saveTelegramChatId} disabled={telegramSaving}>
-                      {telegramSaving ? 'Сохраняем...' : 'Сохранить'}
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'grid', gap: 6 }}>
-                    <div style={{ fontWeight: 900 }}>Уведомлять при:</div>
-                    <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
-                      <input type="checkbox" checked readOnly /> Проблема
-                    </label>
-                    <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
-                      <input type="checkbox" checked readOnly /> Риск
-                    </label>
-                  </div>
-                </div>
-              )}
-            </section>
           </>
         ) : null}
       </div>
 
-      {lightboxPhoto ? (
-        <div style={lightboxOverlay} onClick={() => setLightboxPhoto(null)} role="dialog" aria-modal="true">
+      {lightbox ? (
+        <div style={lightboxOverlay} onClick={() => setLightbox(null)} role="dialog" aria-modal="true">
           <div style={lightboxCard} onClick={(e) => e.stopPropagation()}>
-            <button type="button" style={lightboxClose} onClick={() => setLightboxPhoto(null)} aria-label="Закрыть" title="Закрыть">
+            <button type="button" style={lightboxClose} onClick={() => setLightbox(null)} aria-label="Закрыть" title="Закрыть">
               ×
             </button>
-            <img src={lightboxPhoto.url} alt={lightboxPhoto.title || 'Фото'} style={lightboxImage} />
+            <button
+              type="button"
+              style={lightboxArrowLeft}
+              onClick={() => setLightbox((cur) => {
+                if (!cur) return cur
+                return { ...cur, index: (cur.index - 1 + cur.items.length) % cur.items.length }
+              })}
+              aria-label="Предыдущее фото"
+              title="Назад"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              style={lightboxArrowRight}
+              onClick={() => setLightbox((cur) => {
+                if (!cur) return cur
+                return { ...cur, index: (cur.index + 1) % cur.items.length }
+              })}
+              aria-label="Следующее фото"
+              title="Вперед"
+            >
+              ›
+            </button>
+
+            <img
+              src={lightbox.items[lightbox.index]?.url}
+              alt={lightbox.items[lightbox.index]?.title || 'Фото'}
+              style={lightboxImage}
+            />
             <div style={lightboxMeta}>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>{lightboxPhoto.title || 'Фото'}</div>
-              <div style={{ ...metaLine, marginTop: 6 }}>{lightboxPhoto.projectName} · {lightboxPhoto.at}</div>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>{lightbox.items[lightbox.index]?.title || 'Фото'}</div>
+              <div style={{ ...metaLine, marginTop: 6 }}>{lightbox.items[lightbox.index]?.projectName} · {lightbox.items[lightbox.index]?.at}</div>
             </div>
           </div>
         </div>
@@ -2175,6 +2210,69 @@ export default function Page() {
                 Отправить в WhatsApp
               </button>
               <button style={secondaryButton} onClick={() => setUpdateModal(null)}>Закрыть</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {settingsModalOpen ? (
+        <div style={modalOverlay} onClick={() => setSettingsModalOpen(false)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={modalHeader}>
+              <div>
+                <div style={sectionTitle}>Настройки</div>
+                <div style={sectionSubTitle}>Telegram уведомления</div>
+              </div>
+              <button style={secondaryButton} onClick={() => setSettingsModalOpen(false)} aria-label="Закрыть" title="Закрыть">×</button>
+            </div>
+
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 950 }}>Telegram уведомления</div>
+                <div style={toggleGroup}>
+                  <button style={tgEnabledLocal ? toggleActive : toggleButton} onClick={() => setTgEnabledLocal(true)}>ВКЛ</button>
+                  <button style={!tgEnabledLocal ? toggleActive : toggleButton} onClick={() => setTgEnabledLocal(false)}>ВЫКЛ</button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 950 }}>Chat ID:</div>
+                <input
+                  style={{ ...dateInput, minWidth: 260 }}
+                  value={tgChatIdLocal}
+                  onChange={(e) => setTgChatIdLocal(e.target.value)}
+                  placeholder="123456789"
+                />
+              </div>
+
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontWeight: 950 }}>Уведомлять при:</div>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                  <input type="checkbox" checked readOnly /> Проблема
+                </label>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#475569', fontWeight: 800 }}>
+                  <input type="checkbox" checked readOnly /> Риск
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  style={primaryButton}
+                  onClick={() => {
+                    try {
+                      window.localStorage.setItem('tg_enabled', tgEnabledLocal ? '1' : '0')
+                      window.localStorage.setItem('tg_chat_id', tgChatIdLocal || '')
+                      showToast('Настройки сохранены')
+                      setSettingsModalOpen(false)
+                    } catch {
+                      showToast('Не удалось сохранить настройки')
+                    }
+                  }}
+                >
+                  Сохранить
+                </button>
+                <button style={secondaryButton} onClick={() => setSettingsModalOpen(false)}>Отмена</button>
+              </div>
             </div>
           </div>
         </div>
@@ -2392,12 +2490,14 @@ function ReportCard({
   risks,
   ok,
   blockers,
+  durationDays,
 }: {
   reportText: string
   problems: number
   risks: number
   ok: number
   blockers: Problem[]
+  durationDays: (p: Problem) => number
 }) {
   const updatedAt = useMemo(() => formatDateTime(new Date().toISOString()), [])
   const title = useMemo(() => String(reportText || '').split('\n')[0] || 'Отчёт директору', [reportText])
@@ -2431,7 +2531,7 @@ function ReportCard({
               {blockers.filter((b) => b.severity === 'red').map((b) => (
                 <div key={b.id} style={reportBlockerRow}>
                   <div style={{ fontWeight: 900 }}>
-                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
+                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {durationDays(b)} дн.
                   </div>
                 </div>
               ))}
@@ -2446,7 +2546,7 @@ function ReportCard({
               {blockers.filter((b) => b.severity === 'yellow').map((b) => (
                 <div key={b.id} style={reportBlockerRow}>
                   <div style={{ fontWeight: 900 }}>
-                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {b.days_count || 1} дн.
+                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {durationDays(b)} дн.
                   </div>
                 </div>
               ))}
@@ -2612,6 +2712,8 @@ const authChip: CSSProperties = { display: 'inline-flex', alignItems: 'center', 
 const lightboxOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14 }
 const lightboxCard: CSSProperties = { position: 'relative', width: 'min(1100px, 90vw)', maxHeight: '85vh', display: 'grid', gap: 12 }
 const lightboxClose: CSSProperties = { position: 'absolute', right: 0, top: 0, width: 44, height: 44, borderRadius: 12, border: '1px solid rgba(255,255,255,.25)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 28, lineHeight: 1, fontWeight: 800 }
+const lightboxArrowLeft: CSSProperties = { position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: 44, height: 60, borderRadius: 12, border: '1px solid rgba(255,255,255,.18)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 34, lineHeight: 1, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const lightboxArrowRight: CSSProperties = { ...lightboxArrowLeft, left: 'auto', right: 0 }
 const lightboxImage: CSSProperties = { width: '100%', maxHeight: '85vh', objectFit: 'contain', borderRadius: 12, display: 'block' }
 const lightboxMeta: CSSProperties = { color: '#fff', padding: '0 4px' }
 
