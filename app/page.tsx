@@ -182,6 +182,10 @@ export default function Page() {
   const [alertExpandedMobile, setAlertExpandedMobile] = useState(false)
   const [activeTab, setActiveTab] = useState<DashboardTab>('problems')
   const [openContactId, setOpenContactId] = useState<string | null>(null)
+  const [filterEmployee, setFilterEmployee] = useState<string>('all')
+  const [historyProjectFilter, setHistoryProjectFilter] = useState<string>('all')
+  const [historyEventFilter, setHistoryEventFilter] = useState<'all' | 'created' | 'closed' | 'updated'>('all')
+  const [expandedHistoryStages, setExpandedHistoryStages] = useState<Record<string, boolean>>({})
 
   async function fetchTasks() {
     let query = supabase
@@ -487,7 +491,8 @@ export default function Page() {
       .filter((p) => p.status === 'open' && p.is_active !== false)
       .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
       .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
-  }, [problems, selectedProject, dateFrom, dateTo])
+      .filter((p) => filterEmployee === 'all' || (p.responsible_person || 'Не назначен') === filterEmployee)
+  }, [problems, selectedProject, dateFrom, dateTo, filterEmployee])
 
   const stageOptions = useMemo(() => {
     const set = new Set<string>()
@@ -628,14 +633,57 @@ export default function Page() {
     return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8)
   }, [activeProblemsBase])
 
-  const employeeSummary = useMemo(() => {
-    const map: Record<string, number> = {}
-    activeProblemsBase.forEach((item) => {
-      const key = item.responsible_person || 'Не указан'
-      map[key] = (map[key] || 0) + 1
+  const employeeTaskStatus = useMemo(() => {
+    const now = Date.now()
+    const base = problems
+      .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
+      .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
+
+    const map: Record<
+      string,
+      { name: string; open_problems: number; open_risks: number; overdue_tasks: number; closed_tasks: number }
+    > = {}
+
+    function ensure(name: string) {
+      map[name] = map[name] || { name, open_problems: 0, open_risks: 0, overdue_tasks: 0, closed_tasks: 0 }
+      return map[name]
+    }
+
+    base.forEach((p) => {
+      const name = (p.responsible_person || 'Не назначен').trim() || 'Не назначен'
+      const row = ensure(name)
+      const isOpen = p.status === 'open' && p.is_active !== false
+      const isClosed = p.status === 'closed' || p.is_active === false
+
+      if (isOpen && p.severity === 'red') row.open_problems += 1
+      if (isOpen && p.severity === 'yellow') row.open_risks += 1
+      if (isClosed) row.closed_tasks += 1
+
+      if (isOpen) {
+        const createdAt = p.first_seen_at || p.last_seen_at
+        const createdMs = createdAt ? new Date(createdAt).getTime() : NaN
+        if (Number.isFinite(createdMs)) {
+          const diffDays = (now - createdMs) / (1000 * 60 * 60 * 24)
+          if (diffDays > 3) row.overdue_tasks += 1
+        }
+      }
     })
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8)
-  }, [activeProblemsBase])
+
+    return Object.values(map).sort((a, b) => (b.open_problems + b.open_risks + b.overdue_tasks) - (a.open_problems + a.open_risks + a.overdue_tasks))
+  }, [problems, selectedProject, dateFrom, dateTo])
+
+  const problemsById = useMemo(() => {
+    const map = new Map<string, Problem>()
+    problems.forEach((p) => map.set(p.id, p))
+    return map
+  }, [problems])
+
+  function historyKind(text: string) {
+    const t = (text || '').toLowerCase()
+    if (t.includes('создан')) return 'created' as const
+    if (t.includes('закрыт')) return 'closed' as const
+    return 'updated' as const
+  }
 
   const blockers = useMemo(() => {
     return activeProblemsBase
@@ -657,6 +705,40 @@ export default function Page() {
     }
     return scoped.filter((h) => isInsideDateRange(h.created_at, dateFrom, dateTo)).slice(0, 25)
   }, [history, selectedProject, selectedProblemForHistory, dateFrom, dateTo, companyId, visibleProjectNames])
+
+  const historyProjectOptions = useMemo(() => {
+    const set = new Set<string>()
+    filteredHistory.forEach((h) => set.add((h.project_name || 'Без объекта').trim() || 'Без объекта'))
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
+  }, [filteredHistory])
+
+  const historyGrouped = useMemo(() => {
+    const scoped = filteredHistory
+      .map((h) => {
+        const projectName = (h.project_name || 'Без объекта').trim() || 'Без объекта'
+        const problem = h.problem_id ? problemsById.get(h.problem_id) : undefined
+        const stage = (problem?.stage || 'Без этапа').trim() || 'Без этапа'
+        const kind = historyKind(h.event)
+        return { ...h, projectName, stage, kind }
+      })
+      .filter((h) => historyProjectFilter === 'all' || h.projectName === historyProjectFilter)
+      .filter((h) => historyEventFilter === 'all' || h.kind === historyEventFilter)
+
+    const byStage: Record<string, typeof scoped> = {}
+    scoped.forEach((h) => {
+      byStage[h.stage] = byStage[h.stage] || []
+      byStage[h.stage].push(h)
+    })
+
+    const stages = Object.entries(byStage)
+      .map(([stageName, items]) => ({
+        stageName,
+        items: items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+      }))
+      .sort((a, b) => a.stageName.localeCompare(b.stageName, 'ru'))
+
+    return stages
+  }, [filteredHistory, problemsById, historyProjectFilter, historyEventFilter])
 
   const modalHistory = useMemo(() => {
     if (!historyModalProblem) return []
@@ -826,8 +908,8 @@ export default function Page() {
       .map((p, i) => `${i + 1}. ${p.project_name || 'Без объекта'} — ${p.title} — ${p.days_count || 1} дн.`)
       .join('\n') || 'Рисков нет'
 
-    return `FixBuild — отчет директору\n\nОбъект: ${selectedProject === 'all' ? 'Все объекты' : selectedProject}\nПериод: ${dateFrom || 'с начала'} — ${dateTo || 'сегодня'}\nПроблем: ${redCount}\nРисков: ${yellowCount}\nВ норме: ${greenCount}\nТребует внимания: ${attentionCount}\n\nГлавные блокеры:\n${blockerText}\n\nРиски:\n${riskText}\n\nПроблемы по этапам:\n${stageSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nПроблемы по причинам:\n${reasonSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nЭффективность сотрудников / кто чаще фигурирует в активных проблемах:\n${employeeSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nПоследние события:\n${recentTasks.slice(0, 5).map((t, i) => `${i + 1}. ${t.title} — ${t.project_name || 'Без объекта'} — ${taskStatusText(t.color_indicator)}`).join('\n') || '- нет'}`
-  }, [activeProblemsBase, projectFilteredTasks, blockers, stageSummary, reasonSummary, employeeSummary, recentTasks, selectedProject, dateFrom, dateTo])
+    return `FixBuild — отчет директору\n\nОбъект: ${selectedProject === 'all' ? 'Все объекты' : selectedProject}\nПериод: ${dateFrom || 'с начала'} — ${dateTo || 'сегодня'}\nПроблем: ${redCount}\nРисков: ${yellowCount}\nВ норме: ${greenCount}\nТребует внимания: ${attentionCount}\n\nГлавные блокеры:\n${blockerText}\n\nРиски:\n${riskText}\n\nПроблемы по этапам:\n${stageSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nПроблемы по причинам:\n${reasonSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nСтатус задач сотрудников:\n${employeeTaskStatus.slice(0, 8).map((r, i) => `${i + 1}. ${r.name} — проблем: ${r.open_problems}, рисков: ${r.open_risks}, просрочено: ${r.overdue_tasks}, закрыто: ${r.closed_tasks}`).join('\n') || '- нет'}\n\nПоследние события:\n${recentTasks.slice(0, 5).map((t, i) => `${i + 1}. ${t.title} — ${t.project_name || 'Без объекта'} — ${taskStatusText(t.color_indicator)}`).join('\n') || '- нет'}`
+  }, [activeProblemsBase, projectFilteredTasks, blockers, stageSummary, reasonSummary, employeeTaskStatus, recentTasks, selectedProject, dateFrom, dateTo])
 
   async function copyReport() {
     await navigator.clipboard.writeText(reportText)
@@ -1394,7 +1476,15 @@ export default function Page() {
             <section style={grid4R}>
               <SummaryPanel title="Проблемы по этапам" subtitle="Где чаще всего копятся риски и блокеры" items={stageSummary} />
               <SummaryPanel title="Проблемы по причинам" subtitle="Что чаще всего вызывает сбои" items={reasonSummary} />
-              <SummaryPanel title="Эффективность сотрудников" subtitle="Кто чаще фигурирует в активных проблемах" items={employeeSummary} />
+              <EmployeeStatusPanel
+                isMobile={isMobile}
+                rows={employeeTaskStatus}
+                onPickEmployee={(name) => {
+                  setFilterEmployee(name)
+                  setActiveTab('problems')
+                  scrollToActiveIssues()
+                }}
+              />
               <div style={panelR}>
                 <div style={sectionTitle}>Итоги</div>
                 <div style={sectionSubTitle}>Короткий обзор по выбранному периоду</div>
@@ -1549,35 +1639,92 @@ export default function Page() {
         ) : null}
 
         {activeTab === 'history' ? (
-          <CollapsibleSection
-            title="История проблем"
-            count={filteredHistory.length}
-            storageKey="history_expanded"
-            defaultExpanded={true}
-            headerActions={(
-              <>
-                <select style={projectSelect} value={selectedProblemForHistory} onChange={(e) => setSelectedProblemForHistory(e.target.value)}>
-                  <option value="all">Все проблемы</option>
-                  {problems.map((problem) => (
-                    <option key={problem.id} value={problem.id}>{problem.project_name || 'Без проекта'} — {problem.title}</option>
-                  ))}
-                </select>
-                {selectedProblemForHistory !== 'all' ? <button style={secondaryButton} onClick={() => setSelectedProblemForHistory('all')}>Сбросить</button> : null}
-              </>
+          <section style={panelR}>
+            <div style={panelHeader}>
+              <div>
+                <div style={sectionTitle}>История проблем</div>
+                <div style={sectionSubTitle}>Группировка по объекту и этапам</div>
+              </div>
+              <div style={actionRow}>
+                <button
+                  type="button"
+                  style={secondaryButton}
+                  onClick={() => setExpandedHistoryStages({})}
+                >
+                  Свернуть всё
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select
+                style={projectSelect}
+                value={historyProjectFilter}
+                onChange={(e) => setHistoryProjectFilter(e.target.value)}
+              >
+                <option value="all">Выбери объект: все</option>
+                {historyProjectOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+
+              <div style={toggleGroup}>
+                <button type="button" style={historyEventFilter === 'all' ? toggleActive : toggleButton} onClick={() => setHistoryEventFilter('all')}>Все</button>
+                <button type="button" style={historyEventFilter === 'created' ? toggleActive : toggleButton} onClick={() => setHistoryEventFilter('created')}>Создана</button>
+                <button type="button" style={historyEventFilter === 'closed' ? toggleActive : toggleButton} onClick={() => setHistoryEventFilter('closed')}>Закрыта</button>
+                <button type="button" style={historyEventFilter === 'updated' ? toggleActive : toggleButton} onClick={() => setHistoryEventFilter('updated')}>Обновлена</button>
+              </div>
+            </div>
+
+            {historyGrouped.length === 0 ? (
+              <div style={emptyBox}>Истории пока нет</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+                {historyGrouped.map((stage) => {
+                  const open = Boolean(expandedHistoryStages[stage.stageName])
+                  return (
+                    <div key={stage.stageName} style={stageAccordionCard}>
+                      <button
+                        type="button"
+                        style={stageAccordionHeader}
+                        onClick={() => setExpandedHistoryStages((cur) => ({ ...cur, [stage.stageName]: !open }))}
+                      >
+                        <div style={{ fontWeight: 950 }}>{stage.stageName}</div>
+                        <div style={metaLine}>{open ? 'Свернуть' : `Показать (${stage.items.length})`}</div>
+                      </button>
+
+                      {open ? (
+                        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                          {stage.items.map((item) => {
+                            const kind = item.kind as 'created' | 'closed' | 'updated'
+                            const icon = kind === 'created' ? '🔴' : kind === 'closed' ? '✅' : '🔵'
+                            const color = kind === 'created' ? '#DC2626' : kind === 'closed' ? '#16A34A' : '#2563EB'
+                            const label = kind === 'created' ? 'Создана проблема' : kind === 'closed' ? 'Проблема закрыта' : 'Проблема обновлена'
+                            return (
+                              <div key={item.id} style={historyEventRow}>
+                                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                  <div style={{ fontWeight: 950, color }}>{icon}</div>
+                                  <div style={{ display: 'grid', gap: 4 }}>
+                                    <div style={{ fontWeight: 950 }}>
+                                      <span style={{ color }}>{label}</span>
+                                      {item.projectName ? <span style={{ color: '#334155' }}> · <strong>{item.projectName}</strong></span> : null}
+                                    </div>
+                                    <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                                    <div style={taskSummary}>{item.event}</div>
+                                    {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
             )}
-          >
-            <div style={sectionSubTitle}>Создание, обновление, закрытие, переоткрытие</div>
-            {filteredHistory.length === 0 ? <div style={emptyBox}>Истории пока нет</div> : (
-              <div style={listWrap}>{filteredHistory.map((item) => (
-                <div key={item.id} style={listItem}>
-                  <div style={listTitle}>{item.project_name || 'Без объекта'} — {item.problem_title || 'Проблема'}</div>
-                  <div style={metaLine}>{formatDateTime(item.created_at)}</div>
-                  <div style={taskSummary}>{item.event}</div>
-                  {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
-                </div>
-              ))}</div>
-            )}
-          </CollapsibleSection>
+          </section>
         ) : null}
 
         {activeTab === 'journal' ? (
@@ -1817,6 +1964,81 @@ function SummaryPanel({ title, subtitle, items }: { title: string; subtitle: str
   )
 }
 
+function EmployeeStatusPanel({
+  isMobile,
+  rows,
+  onPickEmployee,
+}: {
+  isMobile: boolean
+  rows: Array<{ name: string; open_problems: number; open_risks: number; overdue_tasks: number; closed_tasks: number }>
+  onPickEmployee: (name: string) => void
+}) {
+  if (isMobile) {
+    return (
+      <div style={panel}>
+        <div style={sectionTitle}>Статус задач сотрудников</div>
+        <div style={sectionSubTitle}>Проблемы, риски, просрочки и закрытые задачи</div>
+        {rows.length === 0 ? <div style={emptyBox}>Нет данных</div> : (
+          <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+            {rows.map((r) => (
+              <div key={r.name} style={listItem}>
+                <div style={{ fontWeight: 950 }}>{r.name}</div>
+                <div style={{ ...metaLine, marginTop: 6 }}>
+                  Проблемы: <strong>{r.open_problems}</strong> &nbsp;·&nbsp; Просрочено: <strong>{r.overdue_tasks}</strong> &nbsp;·&nbsp; Закрыто: <strong>{r.closed_tasks}</strong>
+                </div>
+                <button style={{ ...secondaryButton, marginTop: 10 }} onClick={() => onPickEmployee(r.name)}>
+                  Показать задачи
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div style={panel}>
+      <div style={sectionTitle}>Статус задач сотрудников</div>
+      <div style={sectionSubTitle}>Клик по строке фильтрует “Активные проблемы” по ответственному</div>
+      {rows.length === 0 ? <div style={emptyBox}>Нет данных</div> : (
+        <div style={{ marginTop: 12 }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={cellHeader}>Имя</th>
+                <th style={cellHeader}>Проблемы</th>
+                <th style={cellHeader}>Риски</th>
+                <th style={cellHeader}>Просрочено</th>
+                <th style={cellHeader}>Закрыто</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const overdueStyle: CSSProperties =
+                  r.overdue_tasks === 0
+                    ? { color: '#64748b' }
+                    : r.overdue_tasks <= 2
+                      ? { color: '#D97706', fontWeight: 900 }
+                      : { color: '#DC2626', fontWeight: 950 }
+                return (
+                  <tr key={r.name} style={{ cursor: 'pointer' }} onClick={() => onPickEmployee(r.name)}>
+                    <td style={cellStrong}>{r.name}</td>
+                    <td style={cell}>{r.open_problems}</td>
+                    <td style={cell}>{r.open_risks}</td>
+                    <td style={{ ...cell, ...overdueStyle }}>{r.overdue_tasks}</td>
+                    <td style={cell}>{r.closed_tasks}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReportCard({
   reportText,
   problems,
@@ -2027,3 +2249,7 @@ const lightboxMeta: CSSProperties = { color: '#fff', padding: '0 4px' }
 const tabsWrap: CSSProperties = { display: 'flex', gap: 10, marginTop: 14, marginBottom: 14, overflowX: 'auto', paddingBottom: 6 }
 const tabButton: CSSProperties = { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 12, padding: '10px 12px', fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }
 const tabActive: CSSProperties = { ...tabButton, background: '#0f172a', color: '#fff', border: '1px solid #0f172a' }
+
+const stageAccordionCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, padding: 10, background: '#fff' }
+const stageAccordionHeader: CSSProperties = { width: '100%', textAlign: 'left' as const, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }
+const historyEventRow: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: '#fff' }
