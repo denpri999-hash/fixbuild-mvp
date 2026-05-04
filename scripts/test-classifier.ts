@@ -1,4 +1,4 @@
-import { __detectStateForTest } from '../app/api/whatsapp/route.ts'
+import { __detectStateForTest } from '../app/api/whatsapp/route'
 
 // Скрываем шумные debug-логи классификатора в тестовом прогоне
 const _log = console.log.bind(console)
