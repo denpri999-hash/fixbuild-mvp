@@ -969,6 +969,7 @@ export default function Page() {
   // Diagnostics for interactive actions
   const closeProblem = async (problemId: string) => {
     console.log('[closeProblem] start', { problemId, companyId })
+    alert('Closing: ' + problemId + ' company: ' + companyId)
     if (!companyId) {
       console.error('No companyId')
       return
@@ -985,11 +986,13 @@ export default function Page() {
 
       if (error) {
         console.error('Close error:', error)
+        alert('Error: ' + JSON.stringify(error))
         return
       }
 
       setProblems((prev) => prev.filter((p) => p.id !== problemId))
       console.log('[closeProblem] ok', { problemId })
+      alert('Success!')
     } catch (e) {
       console.error('Close exception:', e)
     }
@@ -997,6 +1000,7 @@ export default function Page() {
 
   const reopenProblem = async (problemId: string) => {
     console.log('[reopenProblem] start', { problemId, companyId })
+    alert('Reopening: ' + problemId + ' company: ' + companyId)
     if (!companyId) {
       console.error('No companyId')
       return
@@ -1013,11 +1017,13 @@ export default function Page() {
 
       if (error) {
         console.error('Reopen error:', error)
+        alert('Error: ' + JSON.stringify(error))
         return
       }
 
       setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
       console.log('[reopenProblem] ok', { problemId })
+      alert('Success!')
     } catch (e) {
       console.error('Reopen exception:', e)
     }
