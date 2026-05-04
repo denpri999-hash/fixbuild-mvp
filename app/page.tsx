@@ -1041,6 +1041,7 @@ export default function Page() {
   const headerR: CSSProperties = { ...header, alignItems: isMobile ? 'stretch' : header.alignItems }
   const panelR: CSSProperties = { ...panel, padding: isMobile ? 12 : 18 }
   const sidePanelR: CSSProperties = { ...sidePanel, padding: isMobile ? 12 : 18 }
+  const titleR: CSSProperties = { ...title, fontSize: isMobile ? 20 : title.fontSize }
   const kpiGridR: CSSProperties = {
     ...kpiGrid,
     gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
@@ -1048,37 +1049,121 @@ export default function Page() {
   }
   const grid4R: CSSProperties = {
     ...grid4,
-    gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+    gridTemplateColumns: isMobile ? 'repeat(1, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
     gap: isMobile ? 12 : 14,
   }
-  const filtersRowR: CSSProperties = { ...filtersRow, justifyContent: isMobile ? 'flex-start' : filtersRow.justifyContent }
+  const filtersRowR: CSSProperties = isMobile
+    ? { ...filtersRow, justifyContent: 'flex-start', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 6 }
+    : { ...filtersRow, justifyContent: filtersRow.justifyContent }
   const authChipR: CSSProperties = { ...authChip, padding: isMobile ? '0px' : authChip.padding }
   const actionIconSize = isMobile ? 44 : 32
+  const reportHeaderActionsR: CSSProperties = isMobile ? { ...actionRow, flexWrap: 'wrap', gap: 8 } : actionRow
+  const reportActionButtonR: CSSProperties = isMobile ? { ...secondaryButton, padding: '7px 10px', fontSize: 13 } : secondaryButton
+  const reportPrimaryButtonR: CSSProperties = isMobile ? { ...primaryButton, padding: '7px 10px', fontSize: 13 } : primaryButton
+  const reportMiniButtonR: CSSProperties = isMobile ? { ...secondaryButton, padding: '7px 10px', fontSize: 13 } : secondaryButton
 
   return (
     <main style={pageWrapR}>
       <div style={container}>
         <header style={headerR}>
-          <div>
-            <h1 style={title}>FixBuild Dashboard</h1>
-            <p style={subtitle}>Панель директора: реальные проблемы, риски, этапы, причины, объекты, фотоархив и сотрудники</p>
-          </div>
+          {isMobile ? (
+            <div style={{ width: '100%', display: 'grid', gap: 10 }}>
+              <div style={mobileHeaderRow}>
+                <h1 style={mobileHeaderTitle}>FixBuild</h1>
+                <select style={mobileProjectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
+                  <option value="all">Все объекты</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.name}>{project.name}</option>
+                  ))}
+                </select>
+              </div>
 
-          <div style={filtersRowR}>
-            <select style={projectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
-              <option value="all">Все объекты</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.name}>{project.name}</option>
-              ))}
-            </select>
-            <input style={dateInput} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input style={dateInput} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-            <button style={secondaryButton} onClick={fetchAll}>Обновить</button>
-            <div style={authChipR}>
-              {isMobile ? null : <span>{userEmail || '—'}</span>}
-              <button style={secondaryMiniButton} onClick={logout}>Выйти</button>
+              <div style={mobileDatesRow}>
+                <div style={{ ...dateFieldWrap, flex: 1 }}>
+                  <input style={{ ...dateInput, width: '100%' }} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  {dateFrom ? (
+                    <button
+                      type="button"
+                      style={dateClearButton}
+                      onClick={() => { setDateFrom(''); fetchAll() }}
+                      aria-label="Сбросить дату от"
+                      title="Сбросить"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <div style={{ ...dateFieldWrap, flex: 1 }}>
+                  <input style={{ ...dateInput, width: '100%' }} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  {dateTo ? (
+                    <button
+                      type="button"
+                      style={dateClearButton}
+                      onClick={() => { setDateTo(''); fetchAll() }}
+                      aria-label="Сбросить дату до"
+                      title="Сбросить"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div style={mobileActionsRow}>
+                <button style={{ ...secondaryButton, flex: 1 }} onClick={fetchAll}>Обновить</button>
+                <button style={{ ...secondaryButton, flex: 1 }} onClick={logout}>Выйти</button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <div>
+                <h1 style={titleR}>FixBuild Dashboard</h1>
+                <p style={subtitle}>Панель директора: реальные проблемы, риски, этапы, причины, объекты, фотоархив и сотрудники</p>
+              </div>
+
+              <div style={filtersRowR}>
+                <select style={projectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
+                  <option value="all">Все объекты</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.name}>{project.name}</option>
+                  ))}
+                </select>
+                <div style={dateFieldWrap}>
+                  <input style={dateInput} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  {dateFrom ? (
+                    <button
+                      type="button"
+                      style={dateClearButton}
+                      onClick={() => { setDateFrom(''); fetchAll() }}
+                      aria-label="Сбросить дату от"
+                      title="Сбросить"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <div style={dateFieldWrap}>
+                  <input style={dateInput} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  {dateTo ? (
+                    <button
+                      type="button"
+                      style={dateClearButton}
+                      onClick={() => { setDateTo(''); fetchAll() }}
+                      aria-label="Сбросить дату до"
+                      title="Сбросить"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <button style={secondaryButton} onClick={fetchAll}>Обновить</button>
+                <div style={authChipR}>
+                  <span>{userEmail || '—'}</span>
+                  <button style={secondaryMiniButton} onClick={logout}>Выйти</button>
+                </div>
+              </div>
+            </>
+          )}
         </header>
 
         {errorText ? <div style={errorBox}>{errorText}</div> : null}
@@ -1099,10 +1184,10 @@ export default function Page() {
           storageKey="report_expanded"
           defaultExpanded={!isMobile}
           headerActions={(
-            <>
-              <button style={secondaryButton} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать'}</button>
-              <button style={primaryButton} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
-            </>
+            <div style={reportHeaderActionsR}>
+              <button style={reportActionButtonR} onClick={copyReport}>{copied ? 'Скопировано' : 'Скопировать'}</button>
+              <button style={reportPrimaryButtonR} onClick={sendTelegramReport} disabled={telegramSending}>{telegramSending ? 'Отправляем...' : 'Отправить в Telegram'}</button>
+            </div>
           )}
         >
           <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
@@ -1219,13 +1304,12 @@ export default function Page() {
                         </div>
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
-                        <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
 
                         <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                           <button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
                           <button
                             style={secondaryMiniButton}
-                            onClick={() => showToast('UI: Закрытие (без backend)')}
+                            onClick={() => closeProblem(problem.id)}
                             disabled={closingId === problem.id}
                           >
                             Закрыть
@@ -1328,7 +1412,7 @@ export default function Page() {
                               style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
                               title="Закрыть"
                               aria-label="Закрыть"
-                              onClick={() => showToast('UI: Закрытие (без backend)')}
+                              onClick={() => closeProblem(problem.id)}
                               disabled={closingId === problem.id}
                             >
                               ✓
@@ -1395,7 +1479,7 @@ export default function Page() {
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
                                               <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
-                                              <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                                              {isMobile ? null : <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>}
                                               {problem.photo_url ? (
                                                 <button
                                                   type="button"
@@ -1430,7 +1514,7 @@ export default function Page() {
                                                 <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
                                                   <td style={cellStrong}>
                                                     <div>{problem.title}</div>
-                                                    <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>
+                                                    {isMobile ? null : <div style={tinyCellText}>{problem.grouping_key || problem.problem_key || problem.id}</div>}
                                                   </td>
                                                   <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
                                                   <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
@@ -1602,39 +1686,55 @@ export default function Page() {
             defaultExpanded={true}
           >
             <div style={sectionSubTitle}>История вручную и автоматически закрытых проблем</div>
-            <div style={tableWrap}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th style={cellHeader}>Проблема</th>
-                    <th style={cellHeader}>Этап</th>
-                    <th style={cellHeader}>Материал</th>
-                    <th style={cellHeader}>Причина</th>
-                    <th style={cellHeader}>Ответственный</th>
-                    <th style={cellHeader}>Последнее обновление</th>
-                    <th style={cellHeader}>История</th>
-                    <th style={cellHeader}>Действие</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {closedProblems.length === 0 ? <tr><td style={emptyCell} colSpan={8}>Закрытых проблем пока нет</td></tr> : closedProblems.map((problem) => (
-                    <tr key={problem.id}>
-                      <td style={cellStrong}>
-                        <div>{problem.title}</div>
-                        <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                      </td>
-                      <td style={cell}>{problem.stage || 'прочее'}</td>
-                      <td style={cell}>{problem.material || 'не указан'}</td>
-                      <td style={cell}>{problem.reason || 'прочее'}</td>
-                      <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
-                      <td style={cell}>{formatDateTime(problem.last_seen_at)}</td>
-                      <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
-                      <td style={cell}>{role === 'admin' ? <button style={secondaryMiniButton} onClick={() => reopenProblem(problem.id)} disabled={reopeningId === problem.id}>{reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}</button> : null}</td>
+            {isMobile ? (
+              <div style={listWrap}>
+                {closedProblems.length === 0 ? (
+                  <div style={emptyBox}>Закрытых проблем пока нет</div>
+                ) : closedProblems.map((problem) => (
+                  <div key={problem.id} style={listItem}>
+                    <div style={{ fontWeight: 950 }}>{problem.title}</div>
+                    <div style={{ ...metaLine, marginTop: 6 }}>
+                      {problem.project_name || 'Без объекта'} · {problem.stage || 'прочее'}
+                    </div>
+                    <div style={{ ...metaLine, marginTop: 6 }}>Закрыто: {formatDateTime(problem.last_seen_at)}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={tableWrap}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={cellHeader}>Проблема</th>
+                      <th style={cellHeader}>Этап</th>
+                      <th style={cellHeader}>Материал</th>
+                      <th style={cellHeader}>Причина</th>
+                      <th style={cellHeader}>Ответственный</th>
+                      <th style={cellHeader}>Последнее обновление</th>
+                      <th style={cellHeader}>История</th>
+                      <th style={cellHeader}>Действие</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {closedProblems.length === 0 ? <tr><td style={emptyCell} colSpan={8}>Закрытых проблем пока нет</td></tr> : closedProblems.map((problem) => (
+                      <tr key={problem.id}>
+                        <td style={cellStrong}>
+                          <div>{problem.title}</div>
+                          <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
+                        </td>
+                        <td style={cell}>{problem.stage || 'прочее'}</td>
+                        <td style={cell}>{problem.material || 'не указан'}</td>
+                        <td style={cell}>{problem.reason || 'прочее'}</td>
+                        <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
+                        <td style={cell}>{formatDateTime(problem.last_seen_at)}</td>
+                        <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
+                        <td style={cell}>{role === 'admin' ? <button style={secondaryMiniButton} onClick={() => reopenProblem(problem.id)} disabled={reopeningId === problem.id}>{reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}</button> : null}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CollapsibleSection>
         ) : null}
 
@@ -2117,6 +2217,8 @@ const subtitle: CSSProperties = { color: '#64748b', marginTop: 10, fontSize: 14 
 const filtersRow: CSSProperties = { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }
 const projectSelect: CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 10, padding: '10px 12px', background: '#fff', minWidth: 150 }
 const dateInput: CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 10, padding: '9px 12px', background: '#fff' }
+const dateFieldWrap: CSSProperties = { position: 'relative', display: 'inline-flex', alignItems: 'center' }
+const dateClearButton: CSSProperties = { position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 28, height: 28, borderRadius: 999, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', cursor: 'pointer', fontWeight: 900, lineHeight: 1 }
 const kpiGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 18 }
 const kpiCard: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 18, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
 const kpiCardButton: CSSProperties = { ...kpiCard, cursor: 'pointer', textAlign: 'left' as const }
@@ -2253,3 +2355,9 @@ const tabActive: CSSProperties = { ...tabButton, background: '#0f172a', color: '
 const stageAccordionCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, padding: 10, background: '#fff' }
 const stageAccordionHeader: CSSProperties = { width: '100%', textAlign: 'left' as const, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }
 const historyEventRow: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: '#fff' }
+
+const mobileHeaderRow: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }
+const mobileHeaderTitle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: 1.1, fontWeight: 950 }
+const mobileProjectSelect: CSSProperties = { ...projectSelect, minWidth: 0, maxWidth: 220 }
+const mobileDatesRow: CSSProperties = { display: 'flex', gap: 10 }
+const mobileActionsRow: CSSProperties = { display: 'flex', gap: 10 }
