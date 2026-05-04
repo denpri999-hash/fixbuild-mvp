@@ -995,7 +995,7 @@ async function closeExistingTaskIfDone(
     .eq('status', 'active')
     .in('color_indicator', ['red', 'yellow'])
     .gte('created_at', fourteenDaysAgo)
-    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(20)
 
   if (error) {
@@ -1078,7 +1078,6 @@ async function closeExistingTaskIfDone(
       status: 'closed',
       color_indicator: 'green',
       ai_summary: `Проблема закрыта по сообщению WhatsApp: ${params.incomingText}`,
-      updated_at: new Date().toISOString(),
       sender_name: params.senderName,
       sender_phone: params.senderPhone || null,
     })
@@ -1130,7 +1129,7 @@ async function updateExistingTaskIfDuplicate(
     .in('color_indicator', ['red', 'yellow'])
     .ilike('ai_summary', `%KEY:${params.taskKey}%`)
     .gte('created_at', sevenDaysAgo)
-    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
@@ -1156,7 +1155,6 @@ async function updateExistingTaskIfDuplicate(
   const { data: updatedTask, error: updateError } = await supabase
     .from('tasks')
     .update({
-      updated_at: new Date().toISOString(),
       color_indicator: nextColor,
       ai_summary: nextSummary,
       sender_name: params.senderName,
@@ -1817,18 +1815,18 @@ export async function POST(req: NextRequest) {
       try {
         const { data: lastClosed, error: lastClosedError } = await supabase
           .from('tasks')
-          .select('id, updated_at, ai_summary')
+          .select('id, created_at, ai_summary')
           .eq('project_name', projectName)
           .eq('status', 'closed')
           .ilike('ai_summary', `%KEY:${taskKey}%`)
-          .order('updated_at', { ascending: false })
+          .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
 
         if (lastClosedError) {
           console.error('ANTI-REOPEN LOOKUP ERROR:', lastClosedError)
-        } else if (lastClosed?.updated_at) {
-          const diffMs = Date.now() - new Date(lastClosed.updated_at).getTime()
+        } else if (lastClosed?.created_at) {
+          const diffMs = Date.now() - new Date(lastClosed.created_at).getTime()
           if (Number.isFinite(diffMs) && diffMs >= 0 && diffMs < 5 * 60 * 1000) {
             return NextResponse.json({ ok: true, skipped: 'recently_closed' })
           }
