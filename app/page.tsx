@@ -953,79 +953,56 @@ export default function Page() {
 
       if (!response.ok || !result?.ok) {
         console.error('Telegram send error:', result)
-        alert(result?.error || 'Не удалось отправить отчет в Telegram')
+        showToast(result?.error || 'Не удалось отправить отчет в Telegram')
         return
       }
 
-      alert('Отчет отправлен в Telegram')
+      showToast('Отчет отправлен в Telegram')
     } catch (error) {
       console.error('Telegram send failed:', error)
-      alert('Ошибка отправки в Telegram')
+      showToast('Ошибка отправки в Telegram')
     } finally {
       setTelegramSending(false)
     }
   }
 
-  // Diagnostics for interactive actions
   const closeProblem = async (problemId: string) => {
-    console.log('[closeProblem] start', { problemId, companyId })
-    alert('Closing: ' + problemId + ' company: ' + companyId)
     if (!companyId) {
       console.error('No companyId')
       return
     }
-    try {
-      const { error } = await supabase
-        .from('problems')
-        .update({
-          is_active: false,
-          closed_at: new Date().toISOString(),
-        })
-        .eq('id', problemId)
-        .eq('company_id', companyId)
 
-      if (error) {
-        console.error('Close error:', error)
-        alert('Error: ' + JSON.stringify(error))
-        return
-      }
+    const { error } = await supabase
+      .from('problems')
+      .update({
+        is_active: false,
+        closed_at: new Date().toISOString(),
+      })
+      .eq('id', problemId)
+      .eq('company_id', companyId)
 
+    if (!error) {
       setProblems((prev) => prev.filter((p) => p.id !== problemId))
-      console.log('[closeProblem] ok', { problemId })
-      alert('Success!')
-    } catch (e) {
-      console.error('Close exception:', e)
     }
   }
 
   const reopenProblem = async (problemId: string) => {
-    console.log('[reopenProblem] start', { problemId, companyId })
-    alert('Reopening: ' + problemId + ' company: ' + companyId)
     if (!companyId) {
       console.error('No companyId')
       return
     }
-    try {
-      const { error } = await supabase
-        .from('problems')
-        .update({
-          is_active: true,
-          closed_at: null,
-        })
-        .eq('id', problemId)
-        .eq('company_id', companyId)
 
-      if (error) {
-        console.error('Reopen error:', error)
-        alert('Error: ' + JSON.stringify(error))
-        return
-      }
+    const { error } = await supabase
+      .from('problems')
+      .update({
+        is_active: true,
+        closed_at: null,
+      })
+      .eq('id', problemId)
+      .eq('company_id', companyId)
 
+    if (!error) {
       setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
-      console.log('[reopenProblem] ok', { problemId })
-      alert('Success!')
-    } catch (e) {
-      console.error('Reopen exception:', e)
     }
   }
 
