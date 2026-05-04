@@ -32,6 +32,7 @@ type Problem = {
   last_seen_at: string | null
   closed_at?: string | null
   watched?: boolean | null
+  created_at?: string | null
   days_count: number | null
   is_active: boolean | null
   project_name: string | null
@@ -173,7 +174,7 @@ export default function Page() {
   const [eventsFilter, setEventsFilter] = useState<EventsFilter>('all')
   const [eventsShowAll, setEventsShowAll] = useState(false)
   const [uiToast, setUiToast] = useState<string | null>(null)
-  const [issuesViewMode, setIssuesViewMode] = useState<'list' | 'by_project'>('list')
+  const [issuesViewMode, setIssuesViewMode] = useState<'control' | 'list' | 'by_project'>('list')
   const [stageFilter, setStageFilter] = useState<string>('all')
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
   const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
@@ -183,6 +184,7 @@ export default function Page() {
   const [telegramChatId, setTelegramChatId] = useState('')
   const [telegramSaving, setTelegramSaving] = useState(false)
   const [alertExpandedMobile, setAlertExpandedMobile] = useState(false)
+  const [attentionExpanded, setAttentionExpanded] = useState(true)
   const [activeTab, setActiveTab] = useState<DashboardTab>('problems')
   const [openContactId, setOpenContactId] = useState<string | null>(null)
   const [filterEmployee, setFilterEmployee] = useState<string>('all')
@@ -193,6 +195,10 @@ export default function Page() {
   const [hoverKey, setHoverKey] = useState<string | null>(null)
   const [removingProblemIds, setRemovingProblemIds] = useState<Record<string, boolean>>({})
   const [closePressedId, setClosePressedId] = useState<string | null>(null)
+  const [deadlines, setDeadlines] = useState<Record<string, string>>({})
+  const [deadlineEditingId, setDeadlineEditingId] = useState<string | null>(null)
+  const [deadlineDraft, setDeadlineDraft] = useState<string>('')
+  const [updateModal, setUpdateModal] = useState<{ title: string; text: string } | null>(null)
 
   async function fetchTasks() {
     let query = supabase
@@ -455,7 +461,7 @@ export default function Page() {
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem('issues_view_mode')
-      if (saved === 'list' || saved === 'by_project') setIssuesViewMode(saved)
+      if (saved === 'control' || saved === 'list' || saved === 'by_project') setIssuesViewMode(saved)
     } catch {
       // ignore
     }
@@ -496,6 +502,19 @@ export default function Page() {
       // ignore
     }
   }, [issuesViewMode])
+
+  function durationDays(p: Problem) {
+    const now = Date.now()
+    const base = p.first_seen_at || p.created_at
+    if (base) {
+      const ms = new Date(base).getTime()
+      if (Number.isFinite(ms)) {
+        const days = Math.floor((now - ms) / 86400000)
+        return Math.max(1, days)
+      }
+    }
+    return Math.max(1, Number(p.days_count || 1))
+  }
 
   const activeProblemsBase = useMemo(() => {
     return problems
@@ -551,7 +570,7 @@ export default function Page() {
     const projectsList = Object.entries(byProject).map(([projectName, items]) => {
       const red = items.filter((i) => i.severity === 'red').length
       const yellow = items.filter((i) => i.severity === 'yellow').length
-      const maxDuration = Math.max(...items.map((i) => Number(i.days_count || 0)), 0)
+      const maxDuration = Math.max(...items.map((i) => durationDays(i)), 0)
 
       const byStage: Record<string, Problem[]> = {}
       items.forEach((p) => {
@@ -563,12 +582,12 @@ export default function Page() {
       const stages = Object.entries(byStage).map(([stageName, stageItems]) => {
         const r = stageItems.filter((i) => i.severity === 'red').length
         const y = stageItems.filter((i) => i.severity === 'yellow').length
-        const max = Math.max(...stageItems.map((i) => Number(i.days_count || 0)), 0)
+        const max = Math.max(...stageItems.map((i) => durationDays(i)), 0)
 
         const sortedTasks = [...stageItems].sort((a, b) => {
           const bySeverity = (severityOrder[a.severity || 'green'] || 99) - (severityOrder[b.severity || 'green'] || 99)
           if (bySeverity !== 0) return bySeverity
-          return Number(b.days_count || 0) - Number(a.days_count || 0)
+          return durationDays(b) - durationDays(a)
         })
 
         return { stageName, red: r, yellow: y, maxDuration: max, tasks: sortedTasks }
@@ -704,7 +723,7 @@ export default function Page() {
   const blockers = useMemo(() => {
     return activeProblemsBase
       .filter((item) => item.severity === 'red')
-      .sort((a, b) => Number(b.days_count || 0) - Number(a.days_count || 0))
+      .sort((a, b) => durationDays(b) - durationDays(a))
       .slice(0, 5)
   }, [activeProblemsBase])
 
@@ -921,7 +940,7 @@ export default function Page() {
       ? blockers
           .map(
             (p, i) =>
-              `${i + 1}. ${p.project_name || 'Без объекта'} — ${p.title} — этап: ${p.stage || 'прочее'} — причина: ${p.reason || 'прочее'} — ответственный: ${p.responsible_person || 'Не указан'} — ${p.days_count || 1} дн.`
+              `${i + 1}. ${p.project_name || 'Без объекта'} — ${p.title} — этап: ${p.stage || 'прочее'} — причина: ${p.reason || 'прочее'} — ответственный: ${p.responsible_person || 'Не указан'} — ${durationDays(p)} дн.`
           )
           .join('\n')
       : 'Критичных блокеров нет'
@@ -929,7 +948,7 @@ export default function Page() {
     const riskText = activeProblemsBase
       .filter((p) => p.severity !== 'red')
       .slice(0, 5)
-      .map((p, i) => `${i + 1}. ${p.project_name || 'Без объекта'} — ${p.title} — ${p.days_count || 1} дн.`)
+      .map((p, i) => `${i + 1}. ${p.project_name || 'Без объекта'} — ${p.title} — ${durationDays(p)} дн.`)
       .join('\n') || 'Рисков нет'
 
     return `FixBuild — отчет директору\n\nОбъект: ${selectedProject === 'all' ? 'Все объекты' : selectedProject}\nПериод: ${dateFrom || 'с начала'} — ${dateTo || 'сегодня'}\nПроблем: ${redCount}\nРисков: ${yellowCount}\nВ норме: ${greenCount}\nТребует внимания: ${attentionCount}\n\nГлавные блокеры:\n${blockerText}\n\nРиски:\n${riskText}\n\nПроблемы по этапам:\n${stageSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nПроблемы по причинам:\n${reasonSummary.map(([name, count]) => `- ${name}: ${count}`).join('\n') || '- нет'}\n\nСтатус задач сотрудников:\n${employeeTaskStatus.slice(0, 8).map((r, i) => `${i + 1}. ${r.name} — проблем: ${r.open_problems}, рисков: ${r.open_risks}, просрочено: ${r.overdue_tasks}, закрыто: ${r.closed_tasks}`).join('\n') || '- нет'}\n\nПоследние события:\n${recentTasks.slice(0, 5).map((t, i) => `${i + 1}. ${t.title} — ${t.project_name || 'Без объекта'} — ${taskStatusText(t.color_indicator)}`).join('\n') || '- нет'}`
@@ -1020,6 +1039,57 @@ export default function Page() {
       const isWatched = prev.includes(problemId)
       return isWatched ? prev.filter((id) => id !== problemId) : [...prev, problemId]
     })
+  }
+
+  function formatDeadlineLabel(value: string) {
+    try {
+      return new Date(value).toLocaleDateString('ru-RU')
+    } catch {
+      return value
+    }
+  }
+
+  function isDeadlineOverdue(value: string) {
+    try {
+      const d = new Date(value)
+      d.setHours(0, 0, 0, 0)
+      const now = new Date()
+      now.setHours(0, 0, 0, 0)
+      return d.getTime() < now.getTime()
+    } catch {
+      return false
+    }
+  }
+
+  function openDeadline(problemId: string) {
+    setDeadlineEditingId(problemId)
+    setDeadlineDraft(deadlines[problemId] || '')
+  }
+
+  async function saveDeadline(problem: Problem) {
+    const date = deadlineDraft
+    if (!date) {
+      setDeadlineEditingId(null)
+      return
+    }
+    setDeadlines((prev) => ({ ...prev, [problem.id]: date }))
+    setDeadlineEditingId(null)
+
+    // optional WhatsApp notify (best-effort, ignore if endpoint doesn't exist)
+    try {
+      await fetch('/api/whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'deadline',
+          problemId: problem.id,
+          deadline: date,
+          text: `Назначен срок по проблеме: ${problem.title}. Срок: ${formatDeadlineLabel(date)}.`,
+        }),
+      })
+    } catch {
+      // ignore
+    }
   }
 
   function requestClose(problemId: string) {
@@ -1205,10 +1275,20 @@ export default function Page() {
 
         {/* Alert */}
         <section style={panelR}>
-          <div style={sectionTitle}>Внимание</div>
-          <div style={sectionSubTitle}>Главные блокеры по выбранному объекту</div>
+          <div style={panelHeader}>
+            <div>
+              <div style={sectionTitle}>Внимание</div>
+              <div style={sectionSubTitle}>Главные блокеры по выбранному объекту</div>
+            </div>
+            <div style={actionRow}>
+              <button style={secondaryButton} onClick={() => setAttentionExpanded((v) => !v)}>
+                {attentionExpanded ? 'Свернуть' : 'Развернуть'}
+              </button>
+            </div>
+          </div>
           {blockers.length === 0 ? <div style={emptyBox}>Алертов нет</div> : (
             <>
+              <div style={{ ...attentionBody, maxHeight: attentionExpanded ? 520 : 0 }}>
               <div style={listWrap}>
                 {blockers.map((item, idx) => {
                   const clamp: CSSProperties =
@@ -1228,10 +1308,11 @@ export default function Page() {
                       onMouseLeave={() => setHoverKey((cur) => (cur === `alert_${item.id}` ? null : cur))}
                     >
                       <div style={{ ...listTitle, ...clamp }}>{item.project_name || 'Без объекта'} — {item.title}</div>
-                      <div style={{ ...metaLine, ...clamp }}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {item.days_count || 1} дн.</div>
+                      <div style={{ ...metaLine, ...clamp }}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {durationDays(item)} дн.</div>
                     </button>
                   )
                 })}
+              </div>
               </div>
               {isMobile ? (
                 <div style={{ marginTop: 10 }}>
@@ -1278,6 +1359,12 @@ export default function Page() {
             <div style={{ ...actionRow, justifyContent: 'flex-end', marginBottom: 12 }}>
               <div style={toggleGroup}>
                 <button
+                  style={issuesViewMode === 'control' ? toggleActive : toggleButton}
+                  onClick={() => setIssuesViewMode('control')}
+                >
+                  Контроль
+                </button>
+                <button
                   style={issuesViewMode === 'list' ? toggleActive : toggleButton}
                   onClick={() => setIssuesViewMode('list')}
                 >
@@ -1299,12 +1386,14 @@ export default function Page() {
             </div>
 
             <div style={tableWrap}>
-              {issuesViewMode === 'list' ? (
+              {issuesViewMode === 'control' && watchedProblems.length === 0 ? (
+                <div style={emptyBox}>Нет задач на контроле. Нажмите 👁 чтобы добавить.</div>
+              ) : issuesViewMode === 'list' || issuesViewMode === 'control' ? (
                 isMobile ? (
                   <div style={listWrap}>
-                    {filteredProblems.length === 0 ? (
+                    {(issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).length === 0 ? (
                       <div style={emptyBox}>Активных проблем нет</div>
-                    ) : filteredProblems.map((problem, idx) => {
+                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).map((problem, idx) => {
                       const removing = Boolean(removingProblemIds[problem.id])
                       const intro: CSSProperties = uiMounted
                         ? { opacity: 1, transform: 'translateY(0)' }
@@ -1324,17 +1413,23 @@ export default function Page() {
                             {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
                             {severityLabel(problem.severity)} {problem.project_name ? ` ${problem.project_name}` : ''}
                           </div>
-                          <div style={{ fontWeight: 900, color: '#334155', fontSize: 12 }}>{problem.days_count || 1} дн.</div>
+                          <div style={{ fontWeight: 900, color: '#334155', fontSize: 12 }}>{durationDays(problem)} дн.</div>
                         </div>
 
                         <div style={metaLine}>
-                          {normalizeNullable(problem.stage, 'Без этапа')} · {normalizeNullable(problem.responsible_person, 'Не назначен')} · {problem.days_count || 1} дн.
+                          {normalizeNullable(problem.stage, 'Без этапа')} · {normalizeNullable(problem.responsible_person, 'Не назначен')} · {durationDays(problem)} дн.
                         </div>
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
+                        {deadlines[problem.id] ? (
+                          <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                            ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                          </div>
+                        ) : null}
 
                         <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                           <button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button>
+                          <button style={secondaryMiniButton} onClick={() => openDeadline(problem.id)}>📅</button>
                           <button
                             style={{ ...secondaryMiniButton, ...(closePressedId === problem.id ? { transform: 'scale(0.9)' } : {}) }}
                             onClick={() => requestClose(problem.id)}
@@ -1343,6 +1438,14 @@ export default function Page() {
                             Закрыть
                           </button>
                         </div>
+
+                        {deadlineEditingId === problem.id ? (
+                          <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input style={dateInput} type="date" value={deadlineDraft} onChange={(e) => setDeadlineDraft(e.target.value)} />
+                            <button style={secondaryButton} onClick={() => saveDeadline(problem)}>ОК</button>
+                            <button style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                          </div>
+                        ) : null}
                       </div>
                       )
                     })}
@@ -1366,7 +1469,7 @@ export default function Page() {
                   <tbody>
                     {filteredProblems.length === 0 ? (
                       <tr><td style={emptyCell} colSpan={10}>Активных проблем нет</td></tr>
-                    ) : filteredProblems.map((problem, idx) => {
+                    ) : (issuesViewMode === 'control' ? filteredProblems.filter((p) => watchedProblems.includes(p.id)) : filteredProblems).map((problem, idx) => {
                       const removing = Boolean(removingProblemIds[problem.id])
                       const intro: CSSProperties = uiMounted
                         ? { opacity: 1, transform: 'translateY(0)' }
@@ -1392,6 +1495,11 @@ export default function Page() {
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
+                          {deadlines[problem.id] ? (
+                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                              ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                            </div>
+                          ) : null}
                         </td>
                         <td style={cell}>{problem.stage || 'Без этапа'}</td>
                         <td style={cell}>{problem.material || 'не указан'}</td>
@@ -1418,7 +1526,7 @@ export default function Page() {
                           </div>
                         </td>
                         <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                        <td style={cell}>{problem.days_count || 1} дн.</td>
+                        <td style={cell}>{durationDays(problem)} дн.</td>
                         <td style={cell}>
                           {problem.photo_url ? (
                             <button
@@ -1450,9 +1558,23 @@ export default function Page() {
                             <button
                               type="button"
                               style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                              title="Дедлайн"
+                              aria-label="Дедлайн"
+                              onClick={() => openDeadline(problem.id)}
+                            >
+                              📅
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
                               title="Запросить обновление"
                               aria-label="Запросить обновление"
-                              onClick={() => requestUpdate(problem)}
+                              onClick={() => {
+                                const project = problem.project_name || 'объект'
+                                const stage = problem.stage || 'этап'
+                                const text = `Добрый день! Нужен статус по объекту ${project}, этап: ${stage}. Напишите актуальный статус текущей ситуации.`
+                                setUpdateModal({ title: 'Запрос обновления', text })
+                              }}
                             >
                               ↺
                             </button>
@@ -1467,6 +1589,13 @@ export default function Page() {
                               ✕
                             </button>
                           </div>
+                          {deadlineEditingId === problem.id ? (
+                            <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <input style={dateInput} type="date" value={deadlineDraft} onChange={(e) => setDeadlineDraft(e.target.value)} />
+                              <button style={secondaryButton} onClick={() => saveDeadline(problem)}>ОК</button>
+                              <button style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                       )
@@ -1525,7 +1654,7 @@ export default function Page() {
                                             <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedIssueId === problem.id ? highlightedRow : {}) }}>
                                               <div style={listTitleSmall}>
                                                 {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
-                                                {severityLabel(problem.severity)} · {problem.days_count || 1} дн.
+                                                {severityLabel(problem.severity)} · {durationDays(problem)} дн.
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
                                               <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
@@ -1568,7 +1697,7 @@ export default function Page() {
                                                   </td>
                                                   <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
                                                   <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                                                  <td style={cell}>{problem.days_count || 1} дн.</td>
+                                                <td style={cell}>{durationDays(problem)} дн.</td>
                                                   <td style={cell}>
                                                     {problem.photo_url ? (
                                                       <button
@@ -2011,6 +2140,46 @@ export default function Page() {
         </div>
       ) : null}
 
+      {updateModal ? (
+        <div style={modalOverlay} onClick={() => setUpdateModal(null)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={modalHeader}>
+              <div>
+                <div style={sectionTitle}>{updateModal.title}</div>
+                <div style={sectionSubTitle}>Текст сообщения для запроса статуса</div>
+              </div>
+              <button style={secondaryButton} onClick={() => setUpdateModal(null)}>Закрыть</button>
+            </div>
+            <pre style={reportBox}>{updateModal.text}</pre>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                style={secondaryButton}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(updateModal.text)
+                    showToast('Скопировано')
+                  } catch {
+                    showToast('Не удалось скопировать')
+                  }
+                }}
+              >
+                Скопировать текст
+              </button>
+              <button
+                style={primaryButton}
+                onClick={() => {
+                  const url = `https://wa.me/?text=${encodeURIComponent(updateModal.text)}`
+                  window.open(url, '_blank', 'noopener,noreferrer')
+                }}
+              >
+                Отправить в WhatsApp
+              </button>
+              <button style={secondaryButton} onClick={() => setUpdateModal(null)}>Закрыть</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {historyModalProblem ? (
         <div style={modalOverlay} onClick={() => setHistoryModalProblem(null)}>
           <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -2403,6 +2572,7 @@ const hoverLift: CSSProperties = { boxShadow: '0 4px 12px rgba(0,0,0,0.08)', tra
 const fadeOutRow: CSSProperties = { opacity: 0, transform: 'translateY(10px)' }
 const fadeOutCard: CSSProperties = { opacity: 0, transform: 'translateY(10px)', maxHeight: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, overflow: 'hidden' }
 const alertRowButton: CSSProperties = { ...blockerCard, cursor: 'pointer', width: '100%', textAlign: 'left' as const }
+const attentionBody: CSSProperties = { overflow: 'hidden', transition: 'max-height 0.3s ease' }
 const toastWrap: CSSProperties = { position: 'fixed', left: 0, right: 0, bottom: 18, display: 'flex', justifyContent: 'center', zIndex: 60, pointerEvents: 'none' }
 const toastCard: CSSProperties = { background: '#0f172a', color: '#fff', borderRadius: 999, padding: '10px 14px', fontWeight: 800, boxShadow: '0 10px 28px rgba(15,23,42,.28)' }
 const toggleGroup: CSSProperties = { display: 'inline-flex', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 12, padding: 3, gap: 3 }
