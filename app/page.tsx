@@ -18,6 +18,7 @@ type Task = {
   sender_name: string | null
   sender_phone: string | null
   photo_url: string | null
+  media_url?: string | null
   status: string | null
   updated_at: string | null
   company_id: string | null
@@ -74,6 +75,7 @@ type ProblemMedia = {
   sender_name: string | null
   comment: string | null
   photo_url: string
+  media_url?: string | null
   created_at: string
   company_id?: string | null
 }
@@ -138,6 +140,14 @@ function emptyText(filter: ProblemFilter) {
 
 function normalizeNullable(value: string | null | undefined, fallback = 'Не указан') {
   return value && value.trim() ? value : fallback
+}
+
+/** URL вложения: API может отдавать `media_url` или `photo_url`. */
+function resolveMediaUrl(row: { photo_url?: string | null; media_url?: string | null } | null | undefined): string | null {
+  if (!row) return null
+  const m = row.media_url != null && String(row.media_url).trim() !== '' ? String(row.media_url).trim() : ''
+  const p = row.photo_url != null && String(row.photo_url).trim() !== '' ? String(row.photo_url).trim() : ''
+  return m || p || null
 }
 
 export default function Page() {
@@ -858,7 +868,7 @@ export default function Page() {
         at: m.created_at,
         meta: m.comment || '',
         issueId: m.problem_id,
-        photoUrl: m.photo_url,
+        photoUrl: resolveMediaUrl(m),
       })
     })
 
@@ -871,7 +881,7 @@ export default function Page() {
         projectName: t.project_name || 'Без объекта',
         at: t.updated_at || t.planned_date || new Date().toISOString(),
         meta: taskStatusText(t.color_indicator),
-        photoUrl: t.photo_url,
+        photoUrl: resolveMediaUrl(t),
         personName: t.sender_name,
         personPhone: t.sender_phone,
       })
@@ -909,6 +919,44 @@ export default function Page() {
   function showToast(text: string) {
     setUiToast(text)
     window.setTimeout(() => setUiToast(null), 2200)
+  }
+
+  function openLightboxFromEvent(event: {
+    photoUrl?: string | null
+    title: string
+    projectName: string
+    at: string
+    issueId?: string | null
+  }) {
+    const primary = event.photoUrl && String(event.photoUrl).trim() ? String(event.photoUrl).trim() : null
+    if (!primary) return
+    let items: Array<{ url: string; title: string; projectName: string; at: string }> = []
+    const pid = event.issueId
+    if (pid) {
+      const seen = new Set<string>()
+      const rows = media
+        .filter((m) => m.problem_id === pid)
+        .filter((m) => Boolean(resolveMediaUrl(m)))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      for (const m of rows) {
+        const url = resolveMediaUrl(m)!
+        if (seen.has(url)) continue
+        seen.add(url)
+        items.push({
+          url,
+          title: m.problem_title || 'Фото',
+          projectName: m.project_name || 'Без объекта',
+          at: formatDateTime(m.created_at),
+        })
+      }
+    }
+    if (items.length === 0) {
+      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDateTime(event.at) }]
+    } else if (!items.some((x) => x.url === primary)) {
+      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDateTime(event.at) }, ...items]
+    }
+    const index = Math.max(0, items.findIndex((x) => x.url === primary))
+    setLightbox({ index, items })
   }
 
   function normalizePhoneForWaLink(value: string | null | undefined) {
@@ -1457,8 +1505,25 @@ export default function Page() {
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
                         {deadlines[problem.id] ? (
-                          <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                            ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                              ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                            </div>
+                            <button
+                              type="button"
+                              aria-label="Убрать срок"
+                              title="Убрать срок"
+                              style={deadlineClearButton}
+                              onClick={() => {
+                                setDeadlines((prev) => {
+                                  const next = { ...prev }
+                                  delete next[problem.id]
+                                  return next
+                                })
+                              }}
+                            >
+                              ×
+                            </button>
                           </div>
                         ) : null}
 
@@ -1531,8 +1596,25 @@ export default function Page() {
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
                           {deadlines[problem.id] ? (
-                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                              ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                                ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                              </div>
+                              <button
+                                type="button"
+                                aria-label="Убрать срок"
+                                title="Убрать срок"
+                                style={deadlineClearButton}
+                                onClick={() => {
+                                  setDeadlines((prev) => {
+                                    const next = { ...prev }
+                                    delete next[problem.id]
+                                    return next
+                                  })
+                                }}
+                              >
+                                ×
+                              </button>
                             </div>
                           ) : null}
                         </td>
@@ -1820,10 +1902,17 @@ export default function Page() {
             </div>
 
             {visibleEvents.length === 0 ? <div style={emptyBox}>Событий пока нет</div> : visibleEvents.map((event) => (
-              <button
+              <div
                 key={event.id}
+                role="button"
+                tabIndex={0}
                 style={eventButton}
                 onClick={() => (event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме'))}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.preventDefault()
+                  event.issueId ? scrollToIssue(event.issueId) : showToast('Нет привязки к проблеме')
+                }}
               >
                 <div style={eventTopRow}>
                   <div style={listTitleSmall}>{event.title}</div>
@@ -1857,8 +1946,33 @@ export default function Page() {
                   </div>
                 ) : null}
                 {event.meta ? <div style={taskSummary}>{event.meta}</div> : null}
-                {event.photoUrl ? <div style={metaLine}>📷 есть фото</div> : null}
-              </button>
+                {event.photoUrl ? (
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      style={eventPhotoOpenButton}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openLightboxFromEvent(event)
+                      }}
+                      aria-label="Открыть фото"
+                      title="Открыть фото"
+                    >
+                      <span aria-hidden>📷</span>
+                    </button>
+                    <button
+                      type="button"
+                      style={eventPhotoTextButton}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openLightboxFromEvent(event)
+                      }}
+                    >
+                      есть фото
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ))}
 
             <div style={{ marginTop: 12 }}>
@@ -1881,18 +1995,18 @@ export default function Page() {
                     style={photoThumbButton}
                     onClick={() => {
                       const items = filteredMedia.map((m) => ({
-                        url: m.photo_url,
+                        url: resolveMediaUrl(m) || m.photo_url,
                         title: m.problem_title || 'Фото',
                         projectName: m.project_name || 'Без объекта',
                         at: formatDateTime(m.created_at),
                       }))
-                      const index = Math.max(0, items.findIndex((x) => x.url === item.photo_url))
+                      const index = Math.max(0, filteredMedia.findIndex((m) => m.id === item.id))
                       setLightbox({ index, items })
                     }}
                     aria-label="Открыть фото"
                     title="Открыть фото"
                   >
-                    <img src={item.photo_url} alt="Фото объекта" style={photoImage} />
+                    <img src={resolveMediaUrl(item) || item.photo_url} alt="Фото объекта" style={photoImage} />
                   </button>
                   <div style={photoMeta}>
                     <div style={metaLine}>{item.project_name || 'Без проекта'}</div>
@@ -2131,30 +2245,34 @@ export default function Page() {
             <button type="button" style={lightboxClose} onClick={() => setLightbox(null)} aria-label="Закрыть" title="Закрыть">
               ×
             </button>
-            <button
-              type="button"
-              style={lightboxArrowLeft}
-              onClick={() => setLightbox((cur) => {
-                if (!cur) return cur
-                return { ...cur, index: (cur.index - 1 + cur.items.length) % cur.items.length }
-              })}
-              aria-label="Предыдущее фото"
-              title="Назад"
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              style={lightboxArrowRight}
-              onClick={() => setLightbox((cur) => {
-                if (!cur) return cur
-                return { ...cur, index: (cur.index + 1) % cur.items.length }
-              })}
-              aria-label="Следующее фото"
-              title="Вперед"
-            >
-              ›
-            </button>
+            {lightbox.items.length > 1 ? (
+              <>
+                <button
+                  type="button"
+                  style={lightboxArrowLeft}
+                  onClick={() => setLightbox((cur) => {
+                    if (!cur) return cur
+                    return { ...cur, index: (cur.index - 1 + cur.items.length) % cur.items.length }
+                  })}
+                  aria-label="Предыдущее фото"
+                  title="Назад"
+                >
+                  ◀
+                </button>
+                <button
+                  type="button"
+                  style={lightboxArrowRight}
+                  onClick={() => setLightbox((cur) => {
+                    if (!cur) return cur
+                    return { ...cur, index: (cur.index + 1) % cur.items.length }
+                  })}
+                  aria-label="Следующее фото"
+                  title="Вперед"
+                >
+                  ▶
+                </button>
+              </>
+            ) : null}
 
             <img
               src={lightbox.items[lightbox.index]?.url}
@@ -2638,7 +2756,43 @@ const listTitleSmall: CSSProperties = { fontWeight: 800, marginBottom: 5, fontSi
 const metaLine: CSSProperties = { color: '#64748b', fontSize: 12, lineHeight: 1.45 }
 const taskSummary: CSSProperties = { color: '#334155', fontSize: 13, marginTop: 6 }
 const eventCard: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 14, padding: 12, marginTop: 10, background: '#fff' }
-const eventButton: CSSProperties = { ...eventCard, width: '100%', textAlign: 'left' as const, cursor: 'pointer', display: 'block' }
+const eventButton: CSSProperties = { ...eventCard, width: '100%', textAlign: 'left' as const, cursor: 'pointer', display: 'block', outline: 'none' }
+const eventPhotoOpenButton: CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 10,
+  border: '1px solid #cbd5e1',
+  background: '#f8fafc',
+  cursor: 'pointer',
+  fontSize: 20,
+  lineHeight: 1,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+}
+const eventPhotoTextButton: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  margin: 0,
+  cursor: 'pointer',
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#475569',
+  textDecoration: 'underline',
+  textUnderlineOffset: 3,
+}
+const deadlineClearButton: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: '#94a3b8',
+  cursor: 'pointer',
+  fontSize: 16,
+  lineHeight: 1,
+  padding: '0 2px',
+  fontWeight: 600,
+}
 const eventTopRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }
 const blockerCard: CSSProperties = { border: '1px solid #fee2e2', borderRadius: 12, padding: 12, marginTop: 10, background: '#fff7f7' }
 const summaryRow: CSSProperties = { display: 'flex', justifyContent: 'space-between', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginTop: 10 }
@@ -2709,12 +2863,12 @@ const modalHeader: CSSProperties = { display: 'flex', justifyContent: 'space-bet
 const modalList: CSSProperties = { display: 'grid', gap: 10 }
 const authChip: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: 999, background: '#fff', fontWeight: 800, color: '#334155' }
 
-const lightboxOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14 }
-const lightboxCard: CSSProperties = { position: 'relative', width: 'min(1100px, 90vw)', maxHeight: '85vh', display: 'grid', gap: 12 }
-const lightboxClose: CSSProperties = { position: 'absolute', right: 0, top: 0, width: 44, height: 44, borderRadius: 12, border: '1px solid rgba(255,255,255,.25)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 28, lineHeight: 1, fontWeight: 800 }
-const lightboxArrowLeft: CSSProperties = { position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: 44, height: 60, borderRadius: 12, border: '1px solid rgba(255,255,255,.18)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 34, lineHeight: 1, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }
-const lightboxArrowRight: CSSProperties = { ...lightboxArrowLeft, left: 'auto', right: 0 }
-const lightboxImage: CSSProperties = { width: '100%', maxHeight: '85vh', objectFit: 'contain', borderRadius: 12, display: 'block' }
+const lightboxOverlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14 }
+const lightboxCard: CSSProperties = { position: 'relative', maxWidth: '90vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }
+const lightboxClose: CSSProperties = { position: 'absolute', right: 8, top: 8, zIndex: 2, width: 36, height: 36, border: 'none', background: 'transparent', color: '#fff', cursor: 'pointer', fontSize: 28, lineHeight: 1, fontWeight: 300 }
+const lightboxArrowLeft: CSSProperties = { position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 2, width: 44, height: 60, borderRadius: 12, border: '1px solid rgba(255,255,255,.18)', background: 'rgba(15,23,42,.35)', color: '#fff', cursor: 'pointer', fontSize: 22, lineHeight: 1, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const lightboxArrowRight: CSSProperties = { ...lightboxArrowLeft, left: 'auto', right: 8 }
+const lightboxImage: CSSProperties = { maxWidth: '90vw', maxHeight: '90vh', width: 'auto', height: 'auto', objectFit: 'contain', borderRadius: 12, display: 'block' }
 const lightboxMeta: CSSProperties = { color: '#fff', padding: '0 4px' }
 
 const tabsWrap: CSSProperties = { display: 'flex', gap: 10, marginTop: 14, marginBottom: 14, overflowX: 'auto', paddingBottom: 6 }
