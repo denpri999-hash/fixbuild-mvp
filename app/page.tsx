@@ -47,6 +47,16 @@ type Problem = {
   photo_url: string | null
   problem_key: string | null
   grouping_key: string | null
+  /** Дата срока (date / timestamptz из Supabase) */
+  deadline?: string | null
+}
+
+type Employee = {
+  id: string
+  name: string
+  phone: string
+  company_id: string
+  is_active?: boolean | null
 }
 
 type Project = {
@@ -142,6 +152,11 @@ function normalizeNullable(value: string | null | undefined, fallback = 'Не у
   return value && value.trim() ? value : fallback
 }
 
+function problemDeadlineDay(p: Problem | undefined | null): string {
+  if (!p?.deadline) return ''
+  return String(p.deadline).slice(0, 10)
+}
+
 /** URL вложения: API может отдавать `media_url` или `photo_url`. */
 function resolveMediaUrl(row: { photo_url?: string | null; media_url?: string | null } | null | undefined): string | null {
   if (!row) return null
@@ -203,13 +218,17 @@ export default function Page() {
   const [hoverKey, setHoverKey] = useState<string | null>(null)
   const [removingProblemIds, setRemovingProblemIds] = useState<Record<string, boolean>>({})
   const [closePressedId, setClosePressedId] = useState<string | null>(null)
-  const [deadlines, setDeadlines] = useState<Record<string, string>>({})
   const [deadlineEditingId, setDeadlineEditingId] = useState<string | null>(null)
   const [deadlineDraft, setDeadlineDraft] = useState<string>('')
   const [updateModal, setUpdateModal] = useState<{ title: string; text: string } | null>(null)
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [tgEnabledLocal, setTgEnabledLocal] = useState(false)
   const [tgChatIdLocal, setTgChatIdLocal] = useState('')
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employeeAddOpen, setEmployeeAddOpen] = useState(false)
+  const [newEmployeeName, setNewEmployeeName] = useState('')
+  const [newEmployeePhone, setNewEmployeePhone] = useState('')
+  const [employeeSaving, setEmployeeSaving] = useState(false)
 
   async function fetchTasks() {
     let query = supabase
@@ -227,7 +246,7 @@ export default function Page() {
   async function fetchProblems() {
     let query = supabase
       .from('problems')
-      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key')
+      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key, deadline')
       .eq('company_id', companyId)
       .order('last_seen_at', { ascending: false })
 
@@ -309,11 +328,18 @@ export default function Page() {
     setMedia(((photoArchiveData || []) as ProblemMedia[]))
   }
 
+  async function fetchEmployees() {
+    if (!companyId) return
+    const { data, error } = await supabase.from('employees').select('*').eq('company_id', companyId)
+    if (error) throw error
+    setEmployees((data || []) as Employee[])
+  }
+
   async function fetchAll() {
     try {
       setErrorText('')
       setLoading(true)
-      await Promise.all([fetchTasks(), fetchProblems(), fetchProjects(), fetchHistory(), fetchMedia()])
+      await Promise.all([fetchTasks(), fetchProblems(), fetchProjects(), fetchHistory(), fetchMedia(), fetchEmployees()])
     } catch (err: any) {
       setErrorText(err?.message || 'Ошибка загрузки данных')
     } finally {
@@ -1141,8 +1167,9 @@ export default function Page() {
   }
 
   function openDeadline(problemId: string) {
+    const p = problems.find((x) => x.id === problemId)
     setDeadlineEditingId(problemId)
-    setDeadlineDraft(deadlines[problemId] || '')
+    setDeadlineDraft(problemDeadlineDay(p))
   }
 
   async function saveDeadline(problem: Problem) {
@@ -1151,23 +1178,118 @@ export default function Page() {
       setDeadlineEditingId(null)
       return
     }
-    setDeadlines((prev) => ({ ...prev, [problem.id]: date }))
+
+    const { error } = await supabase
+      .from('problems')
+      .update({ deadline: date })
+      .eq('id', problem.id)
+      .eq('company_id', companyId)
+
+    if (error) {
+      console.error('deadline save:', error)
+      showToast('Не удалось сохранить срок')
+      return
+    }
+
+    setProblems((prev) => prev.map((p) => (p.id === problem.id ? { ...p, deadline: date } : p)))
     setDeadlineEditingId(null)
 
-    // optional WhatsApp notify (best-effort, ignore if endpoint doesn't exist)
+    const rp = (problem.responsible_person || '').trim()
+    const employee = rp ? employees.find((e) => (e.name || '').trim() === rp) : undefined
+    if (employee?.phone) {
+      const projectName = problem.project_name || '—'
+      const stage = problem.stage || '—'
+      const humanDate = formatDeadlineLabel(date)
+      const message =
+        `Добрый день, ${rp}!\n\n` +
+        `По задаче '${problem.title}', объект: ${projectName}, \n` +
+        `этап: ${stage} — установлен срок выполнения: ${humanDate}.\n` +
+        `Пожалуйста, выполните в указанный срок.`
+      try {
+        const r = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, phone: employee.phone, message }),
+        })
+        if (!r.ok) showToast('Срок сохранён, не удалось отправить WhatsApp')
+      } catch {
+        showToast('Срок сохранён, не удалось отправить WhatsApp')
+      }
+    }
+  }
+
+  async function clearDeadline(problem: Problem) {
+    const { error } = await supabase
+      .from('problems')
+      .update({ deadline: null })
+      .eq('id', problem.id)
+      .eq('company_id', companyId)
+
+    if (error) {
+      console.error('deadline clear:', error)
+      showToast('Не удалось снять срок')
+      return
+    }
+
+    setProblems((prev) => prev.map((p) => (p.id === problem.id ? { ...p, deadline: null } : p)))
+
+    const rp = (problem.responsible_person || '').trim()
+    const employee = rp ? employees.find((e) => (e.name || '').trim() === rp) : undefined
+    if (employee?.phone) {
+      const message =
+        `Добрый день, ${rp}!\n\n` +
+        `Срок по задаче '${problem.title}', объект: ${problem.project_name || '—'}\n` +
+        `был снят руководителем.`
+      try {
+        const r = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, phone: employee.phone, message }),
+        })
+        if (!r.ok) showToast('Срок снят, не удалось отправить WhatsApp')
+      } catch {
+        showToast('Срок снят, не удалось отправить WhatsApp')
+      }
+    }
+  }
+
+  async function saveNewEmployee() {
+    if (!companyId) return
+    const name = newEmployeeName.trim()
+    const phone = newEmployeePhone.trim()
+    if (!name || !phone) {
+      showToast('Укажите имя и телефон')
+      return
+    }
+    setEmployeeSaving(true)
     try {
-      await fetch('/api/whatsapp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'deadline',
-          problemId: problem.id,
-          deadline: date,
-          text: `Назначен срок по проблеме: ${problem.title}. Срок: ${formatDeadlineLabel(date)}.`,
-        }),
-      })
-    } catch {
-      // ignore
+      const { error } = await supabase.from('employees').insert({ company_id: companyId, name, phone, is_active: true })
+      if (error) throw error
+      setNewEmployeeName('')
+      setNewEmployeePhone('')
+      setEmployeeAddOpen(false)
+      await fetchEmployees()
+      showToast('Сотрудник добавлен')
+    } catch (e) {
+      console.error(e)
+      showToast('Ошибка сохранения сотрудника')
+    } finally {
+      setEmployeeSaving(false)
+    }
+  }
+
+  async function removeEmployee(employeeId: string) {
+    setEmployeeSaving(true)
+    try {
+      const { error } = await supabase.from('employees').delete().eq('id', employeeId)
+      if (error) throw error
+      await fetchEmployees()
+      showToast('Сотрудник удалён')
+    } catch (e) {
+      console.error(e)
+      showToast('Ошибка удаления')
+    } finally {
+      setEmployeeSaving(false)
     }
   }
 
@@ -1228,7 +1350,14 @@ export default function Page() {
             <div style={{ width: '100%', display: 'grid', gap: 10 }}>
               <div style={mobileHeaderRow}>
                 <h1 style={mobileHeaderTitle}>FixBuild</h1>
-                <button type="button" style={secondaryMiniButton} onClick={() => setSettingsModalOpen(true)}>
+                <button
+                  type="button"
+                  style={secondaryMiniButton}
+                  onClick={() => {
+                    setSettingsModalOpen(true)
+                    void fetchEmployees()
+                  }}
+                >
                   ⚙ Настройки
                 </button>
                 <select style={mobileProjectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
@@ -1283,7 +1412,16 @@ export default function Page() {
               </div>
 
               <div style={filtersRowR}>
-                <button type="button" style={secondaryButton} onClick={() => setSettingsModalOpen(true)}>⚙ Настройки</button>
+                <button
+                  type="button"
+                  style={secondaryButton}
+                  onClick={() => {
+                    setSettingsModalOpen(true)
+                    void fetchEmployees()
+                  }}
+                >
+                  ⚙ Настройки
+                </button>
                 <select style={projectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
                   <option value="all">Все объекты</option>
                   {projects.map((project) => (
@@ -1504,23 +1642,17 @@ export default function Page() {
                         </div>
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
-                        {deadlines[problem.id] ? (
+                        {problemDeadlineDay(problem) ? (
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                              ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                            <div style={{ ...tinyCellText, color: isDeadlineOverdue(problemDeadlineDay(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                              ⏰ Срок: {formatDeadlineLabel(problemDeadlineDay(problem))}
                             </div>
                             <button
                               type="button"
                               aria-label="Убрать срок"
                               title="Убрать срок"
                               style={deadlineClearButton}
-                              onClick={() => {
-                                setDeadlines((prev) => {
-                                  const next = { ...prev }
-                                  delete next[problem.id]
-                                  return next
-                                })
-                              }}
+                              onClick={() => void clearDeadline(problem)}
                             >
                               ×
                             </button>
@@ -1595,23 +1727,17 @@ export default function Page() {
                         <td style={cellStrong}>
                           <div>{problem.title}</div>
                           <div style={subCellText}>{problem.project_name || 'Без объекта'}</div>
-                          {deadlines[problem.id] ? (
+                          {problemDeadlineDay(problem) ? (
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                              <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlines[problem.id]) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                                ⏰ Срок: {formatDeadlineLabel(deadlines[problem.id])}
+                              <div style={{ ...tinyCellText, color: isDeadlineOverdue(problemDeadlineDay(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
+                                ⏰ Срок: {formatDeadlineLabel(problemDeadlineDay(problem))}
                               </div>
                               <button
                                 type="button"
                                 aria-label="Убрать срок"
                                 title="Убрать срок"
                                 style={deadlineClearButton}
-                                onClick={() => {
-                                  setDeadlines((prev) => {
-                                    const next = { ...prev }
-                                    delete next[problem.id]
-                                    return next
-                                  })
-                                }}
+                                onClick={() => void clearDeadline(problem)}
                               >
                                 ×
                               </button>
@@ -2390,6 +2516,91 @@ export default function Page() {
                   Сохранить
                 </button>
                 <button style={secondaryButton} onClick={() => setSettingsModalOpen(false)}>Отмена</button>
+              </div>
+
+              <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 16, paddingTop: 16, display: 'grid', gap: 12 }}>
+                <div>
+                  <div style={sectionTitle}>Сотрудники</div>
+                  <div style={sectionSubTitle}>Для уведомлений о сроках: имя должно совпадать с ответственным в задаче</div>
+                </div>
+
+                <div style={tableWrap}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={cellHeader}>Имя</th>
+                        <th style={cellHeader}>Телефон</th>
+                        <th style={cellHeader}>Действие</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employees.length === 0 ? (
+                        <tr>
+                          <td style={emptyCell} colSpan={3}>
+                            Пока нет сотрудников
+                          </td>
+                        </tr>
+                      ) : (
+                        employees.map((em) => (
+                          <tr key={em.id}>
+                            <td style={cellStrong}>{em.name}</td>
+                            <td style={cell}>{em.phone}</td>
+                            <td style={cell}>
+                              <button
+                                type="button"
+                                style={secondaryMiniButton}
+                                disabled={employeeSaving}
+                                onClick={() => void removeEmployee(em.id)}
+                              >
+                                Удалить
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {!employeeAddOpen ? (
+                  <button type="button" style={secondaryButton} onClick={() => setEmployeeAddOpen(true)}>
+                    Добавить сотрудника
+                  </button>
+                ) : (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <input
+                      style={dateInput}
+                      type="text"
+                      value={newEmployeeName}
+                      onChange={(e) => setNewEmployeeName(e.target.value)}
+                      placeholder="Имя"
+                    />
+                    <input
+                      style={dateInput}
+                      type="text"
+                      value={newEmployeePhone}
+                      onChange={(e) => setNewEmployeePhone(e.target.value)}
+                      placeholder="77012345678"
+                    />
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <button type="button" style={primaryButton} disabled={employeeSaving} onClick={() => void saveNewEmployee()}>
+                        Сохранить
+                      </button>
+                      <button
+                        type="button"
+                        style={secondaryButton}
+                        disabled={employeeSaving}
+                        onClick={() => {
+                          setEmployeeAddOpen(false)
+                          setNewEmployeeName('')
+                          setNewEmployeePhone('')
+                        }}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
