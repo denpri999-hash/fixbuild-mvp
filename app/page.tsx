@@ -30,6 +30,7 @@ type Problem = {
   severity: Severity
   first_seen_at: string | null
   last_seen_at: string | null
+  closed_at?: string | null
   days_count: number | null
   is_active: boolean | null
   project_name: string | null
@@ -960,8 +961,7 @@ export default function Page() {
         .from('problems')
         .update({
           status: 'closed',
-          is_active: false,
-          last_seen_at: new Date().toISOString(),
+          closed_at: new Date().toISOString(),
         })
         .eq('id', problemId)
 
@@ -977,7 +977,18 @@ export default function Page() {
         },
       ])
 
-      await fetchAll()
+      setProblems((prev) =>
+        prev.map((p) =>
+          p.id === problemId
+            ? ({
+                ...p,
+                status: 'closed',
+                is_active: false,
+                last_seen_at: new Date().toISOString(),
+              } as Problem)
+            : p
+        )
+      )
     } catch (err) {
       console.error('Ошибка закрытия проблемы:', err)
     } finally {
@@ -995,8 +1006,7 @@ export default function Page() {
         .from('problems')
         .update({
           status: 'open',
-          is_active: true,
-          last_seen_at: new Date().toISOString(),
+          closed_at: null,
         })
         .eq('id', problemId)
 
@@ -1012,7 +1022,18 @@ export default function Page() {
         },
       ])
 
-      await fetchAll()
+      setProblems((prev) =>
+        prev.map((p) =>
+          p.id === problemId
+            ? ({
+                ...p,
+                status: 'open',
+                is_active: true,
+                last_seen_at: new Date().toISOString(),
+              } as Problem)
+            : p
+        )
+      )
     } catch (err) {
       console.error('Ошибка переоткрытия проблемы:', err)
     } finally {
@@ -1697,6 +1718,16 @@ export default function Page() {
                       {problem.project_name || 'Без объекта'} · {problem.stage || 'прочее'}
                     </div>
                     <div style={{ ...metaLine, marginTop: 6 }}>Закрыто: {formatDateTime(problem.last_seen_at)}</div>
+                    {role === 'admin' ? (
+                      <button
+                        type="button"
+                        style={{ ...secondaryButton, marginTop: 10 }}
+                        onClick={() => reopenProblem(problem.id)}
+                        disabled={reopeningId === problem.id}
+                      >
+                        {reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>
