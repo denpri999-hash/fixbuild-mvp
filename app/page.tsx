@@ -1937,6 +1937,31 @@ export default function Page() {
                     <option key={stage} value={stage}>Этап: {stage}</option>
                   ))}
                 </select>
+                {(selectedProjectFilter !== 'all' || stageFilter !== 'all' || problemFilter !== 'all' || filterEmployee !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedProjectFilter('all')
+                      setStageFilter('all')
+                      setIssuesSort('default')
+                      setProblemFilter('all')
+                      setFilterEmployee('all')
+                    }}
+                    style={{
+                      fontSize: '13px',
+                      color: '#DC2626',
+                      background: 'none',
+                      border: '1px solid #DC2626',
+                      borderRadius: '6px',
+                      padding: '4px 10px',
+                      cursor: 'pointer',
+                    }}
+                    title="Сбросить фильтры"
+                    aria-label="Сбросить фильтры"
+                  >
+                    × Сбросить фильтры
+                  </button>
+                )}
                 <div style={isMobile ? { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8 } : undefined}>
                 <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => { setIssuesSort('default'); setProblemFilter('all') }}>Все</button>
                 <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => { setIssuesSort('default'); setProblemFilter('red') }}>Проблемы</button>
