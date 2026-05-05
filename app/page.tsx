@@ -97,8 +97,8 @@ const role = 'admin'
 type DashboardTab = 'problems' | 'events' | 'photos' | 'closed' | 'history' | 'journal'
 
 function BrandHeader({ isMobile }: { isMobile: boolean }) {
-  const iconSize = isMobile ? 28 : 32
-  const titleSize = isMobile ? '17px' : '20px'
+  const iconSize = isMobile ? 24 : 36
+  const titleSize = isMobile ? '16px' : '24px'
   const showSubtitle = !isMobile
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
@@ -107,7 +107,7 @@ function BrandHeader({ isMobile }: { isMobile: boolean }) {
         height={iconSize}
         viewBox="0 0 32 32"
         xmlns="http://www.w3.org/2000/svg"
-        style={{ flexShrink: 0 }}
+        style={{ flexShrink: 0, filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.15))' }}
       >
         <rect width="32" height="32" rx="6" fill="#1E293B" />
         <path
@@ -129,11 +129,11 @@ function BrandHeader({ isMobile }: { isMobile: boolean }) {
       <div style={{ minWidth: 0 }}>
         <div
           style={{
-            fontWeight: 700,
+            fontWeight: isMobile ? 800 : 800,
             fontSize: titleSize,
             color: '#0F172A',
             lineHeight: '1.2',
-            letterSpacing: '-0.3px',
+            letterSpacing: '-0.5px',
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -142,7 +142,7 @@ function BrandHeader({ isMobile }: { isMobile: boolean }) {
           FixBuild
         </div>
         {showSubtitle ? (
-          <div style={{ fontWeight: 500, fontSize: '12px', color: '#64748B', lineHeight: '1.2' }}>
+          <div style={{ fontWeight: 500, fontSize: '13px', color: '#64748B', lineHeight: '1.2' }}>
             Контроль проблем и сроков
           </div>
         ) : null}
@@ -773,6 +773,25 @@ export default function Page() {
 
   const [closedProblems, setClosedProblems] = useState<Problem[]>([])
   const watchedCount = useMemo(() => problems.filter((p) => p.watched === true).length, [problems])
+  const [issuesSort, setIssuesSort] = useState<'default' | 'duration'>(() => {
+    if (typeof window === 'undefined') return 'default'
+    try {
+      const saved = window.localStorage.getItem('issues_sort')
+      return saved === 'duration' ? 'duration' : 'default'
+    } catch {
+      return 'default'
+    }
+  })
+  const [highlightedProblemId, setHighlightedProblemId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('issues_sort', issuesSort)
+    } catch {
+      // ignore
+    }
+  }, [issuesSort])
 
   const filteredProblems = useMemo(() => {
     const result = activeProblemsBase
@@ -784,11 +803,12 @@ export default function Page() {
     })
 
     return [...result].sort((a, b) => {
+      if (issuesSort === 'duration') return durationDays(b) - durationDays(a)
       const bySeverity = (severityOrder[a.severity || 'green'] || 99) - (severityOrder[b.severity || 'green'] || 99)
       if (bySeverity !== 0) return bySeverity
-      return Number(b.days_count || 0) - Number(a.days_count || 0)
+      return durationDays(b) - durationDays(a)
     })
-  }, [activeProblemsBase, problemFilter, stageFilter])
+  }, [activeProblemsBase, problemFilter, stageFilter, issuesSort])
 
   const deadlineDayForUi = (p: Problem) => deadlines[p.id] || problemDeadlineDay(p)
 
@@ -1097,6 +1117,12 @@ export default function Page() {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  function scrollToAttention() {
+    const el = document.getElementById('attention')
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   function scrollToIssue(problemId: string | null | undefined) {
     if (!problemId) return
     setActiveTab('problems')
@@ -1107,7 +1133,11 @@ export default function Page() {
       if (!row) return
       row.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setHighlightedIssueId(problemId)
-      window.setTimeout(() => setHighlightedIssueId((current) => (current === problemId ? null : current)), 2600)
+      setHighlightedProblemId(problemId)
+      window.setTimeout(() => {
+        setHighlightedIssueId((current) => (current === problemId ? null : current))
+        setHighlightedProblemId((current) => (current === problemId ? null : current))
+      }, 2000)
       }, 120)
     }, 30)
   }
@@ -1658,53 +1688,24 @@ export default function Page() {
           {isMobile ? (
             <div style={{ width: '100%', display: 'grid', gap: 10 }}>
               <div style={mobileHeaderRow}>
-                <h1 style={mobileHeaderTitle}>FixBuild</h1>
-                <button
-                  type="button"
-                  style={secondaryMiniButton}
-                  onClick={() => {
-                    setSettingsModalOpen(true)
-                    void fetchEmployees()
-                  }}
-                >
-                  ⚙ Настройки
-                </button>
-                <select style={mobileProjectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
-                  <option value="all">Все объекты</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.name}>{project.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={mobileDatesRow}>
-                <div style={{ ...dateFieldWrap, flex: 1 }}>
-                  <input style={{ ...dateInput, width: '100%' }} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                  {dateFrom ? (
-                    <button
-                      type="button"
-                      style={dateClearButton}
-                      onClick={() => { setDateFrom(''); fetchAll() }}
-                      aria-label="Сбросить дату от"
-                      title="Сбросить"
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </div>
-                <div style={{ ...dateFieldWrap, flex: 1 }}>
-                  <input style={{ ...dateInput, width: '100%' }} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                  {dateTo ? (
-                    <button
-                      type="button"
-                      style={dateClearButton}
-                      onClick={() => { setDateTo(''); fetchAll() }}
-                      aria-label="Сбросить дату до"
-                      title="Сбросить"
-                    >
-                      ×
-                    </button>
-                  ) : null}
+                <BrandHeader isMobile={true} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    type="button"
+                    style={secondaryMiniButton}
+                    onClick={() => {
+                      setSettingsModalOpen(true)
+                      void fetchEmployees()
+                    }}
+                  >
+                    ⚙ Настройки
+                  </button>
+                  <select style={mobileProjectSelect} value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
+                    <option value="all">Все объекты</option>
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.name}>{project.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1780,10 +1781,53 @@ export default function Page() {
 
         {/* KPI */}
         <section style={kpiGridR}>
-          <KpiCard label="Проблемы" value={redCount} color="#ef4444" onClick={scrollToActiveIssues} />
-          <KpiCard label="Риски" value={yellowCount} color="#f59e0b" onClick={scrollToActiveIssues} />
-          <KpiCard label="В норме" value={greenCount} color="#22c55e" onClick={scrollToActiveIssues} />
-          <KpiCard label="Требует внимания" value={attentionCount} color="#f97316" onClick={scrollToActiveIssues} />
+          <KpiCard
+            label="Проблемы"
+            value={redCount}
+            color="#ef4444"
+            subtitle="требуют решения"
+            onClick={() => {
+              setActiveTab('problems')
+              setIssuesSort('default')
+              setProblemFilter('red')
+              scrollToActiveIssues()
+            }}
+          />
+          <KpiCard
+            label="Риски"
+            value={yellowCount}
+            color="#f59e0b"
+            subtitle="нужно контролировать"
+            onClick={() => {
+              setActiveTab('problems')
+              setIssuesSort('default')
+              setProblemFilter('yellow')
+              scrollToActiveIssues()
+            }}
+          />
+          <KpiCard
+            label="В норме"
+            value={greenCount}
+            color="#22c55e"
+            subtitle="без действий"
+            onClick={() => {
+              setActiveTab('problems')
+              setIssuesSort('default')
+              scrollToActiveIssues()
+            }}
+          />
+          <KpiCard
+            label="Требует внимания"
+            value={attentionCount}
+            color="#f97316"
+            subtitle="критичные / старые"
+            onClick={() => {
+              setActiveTab('problems')
+              setIssuesSort('duration')
+              setProblemFilter('red')
+              scrollToActiveIssues()
+            }}
+          />
         </section>
 
         {/* Отчет директору / Сводка по объекту */}
@@ -1799,11 +1843,16 @@ export default function Page() {
           )}
         >
           <div style={sectionSubTitle}>Краткая управленческая сводка по текущему состоянию</div>
+          <div style={{ marginTop: 10 }}>
+            <button type="button" style={secondaryButton} onClick={scrollToAttention}>
+              Смотреть все во Внимании
+            </button>
+          </div>
           <ReportCard reportText={reportText} problems={redCount} risks={yellowCount} ok={greenCount} blockers={blockers} durationDays={durationDays} />
         </CollapsibleSection>
 
         {/* Alert */}
-        <section style={panelR}>
+        <section style={panelR} id="attention">
           <div style={panelHeader}>
             <div>
               <div style={sectionTitle}>Внимание</div>
@@ -1837,7 +1886,10 @@ export default function Page() {
                       onMouseLeave={() => setHoverKey((cur) => (cur === `alert_${item.id}` ? null : cur))}
                     >
                       <div style={{ ...listTitle, ...clamp }}>{item.project_name || 'Без объекта'} — {item.title}</div>
-                      <div style={{ ...metaLine, ...clamp }}>Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится: {durationDays(item)} дн.</div>
+                      <div style={{ ...metaLine, ...clamp }}>
+                        Этап: {item.stage || 'прочее'} · Причина: {item.reason || 'прочее'} · Материал: {item.material || 'не указан'} · Длится:{' '}
+                        <span style={durationTone(durationDays(item))}>{durationDays(item)} дн.</span>
+                      </div>
                     </button>
                   )
                 })}
@@ -1886,9 +1938,9 @@ export default function Page() {
                   ))}
                 </select>
                 <div style={isMobile ? { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8 } : undefined}>
-                  <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('all')}>Все</button>
-                  <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('red')}>Проблемы</button>
-                  <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('yellow')}>Риски</button>
+                <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => { setIssuesSort('default'); setProblemFilter('all') }}>Все</button>
+                <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => { setIssuesSort('default'); setProblemFilter('red') }}>Проблемы</button>
+                <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => { setIssuesSort('default'); setProblemFilter('yellow') }}>Риски</button>
                 </div>
               </div>
             </div>
@@ -1970,11 +2022,12 @@ export default function Page() {
                             {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
                             {severityLabel(problem.severity)} {problem.project_name ? ` ${problem.project_name}` : ''}
                           </div>
-                          <div style={{ fontWeight: 900, color: '#334155', fontSize: 12 }}>{durationDays(problem)} дн.</div>
+                          <div style={{ fontWeight: 900, fontSize: 12, ...durationTone(durationDays(problem)) }}>{durationDays(problem)} дн.</div>
                         </div>
 
                         <div style={metaLine}>
-                          {normalizeNullable(problem.stage, 'Без этапа')} · {normalizeNullable(problem.responsible_person, 'Не назначен')} · {durationDays(problem)} дн.
+                          {normalizeNullable(problem.stage, 'Без этапа')} · {normalizeNullable(problem.responsible_person, 'Не назначен')} ·{' '}
+                          <span style={durationTone(durationDays(problem))}>{durationDays(problem)} дн.</span>
                         </div>
 
                         <div style={{ marginTop: 8, fontWeight: 900 }}>{problem.title}</div>
@@ -2000,13 +2053,13 @@ export default function Page() {
                           <button
                             type="button"
                             style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
-                            title="Взять на контроль"
+                            title="На контроль / Снять с контроля"
                             aria-label="Взять на контроль"
                             onClick={() => void toggleWatch(problem.id, problem.watched)}
                           >
                             👁
                           </button>
-                          <button type="button" style={secondaryMiniButton} onClick={() => openDeadline(problem.id)}>📅</button>
+                          <button type="button" style={secondaryMiniButton} title="Поставить дедлайн" aria-label="Поставить дедлайн" onClick={() => openDeadline(problem.id)}>📅</button>
                           <button
                             type="button"
                             style={secondaryMiniButton}
@@ -2116,7 +2169,7 @@ export default function Page() {
                         key={problem.id}
                         id={`problem-${problem.id}`}
                         style={{
-                          ...(highlightedIssueId === problem.id ? highlightedRow : undefined),
+                          ...(highlightedProblemId === problem.id ? highlightedRow : undefined),
                           ...(problem.watched === true ? watchedRow : undefined),
                           ...intro,
                           ...hover,
@@ -2223,7 +2276,7 @@ export default function Page() {
                           </div>
                         </td>
                         <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                        <td style={cell}>{durationDays(problem)} дн.</td>
+                        <td style={{ ...cell, ...durationTone(durationDays(problem)) }}>{durationDays(problem)} дн.</td>
                         <td style={cell}>
                           {problem.photo_url ? (
                             <button
@@ -2400,10 +2453,11 @@ export default function Page() {
                                       isMobile ? (
                                         <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
                                           {st.tasks.map((problem) => (
-                                            <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedIssueId === problem.id ? highlightedRow : {}) }}>
+                                            <div key={problem.id} id={`problem-${problem.id}`} style={{ ...listItem, ...(highlightedProblemId === problem.id ? highlightedRow : {}) }}>
                                               <div style={listTitleSmall}>
                                                 {problem.severity === 'red' ? '🔴 ' : problem.severity === 'yellow' ? '🟡 ' : '🟢 '}
-                                                {severityLabel(problem.severity)} · {durationDays(problem)} дн.
+                                                {severityLabel(problem.severity)} ·{' '}
+                                                <span style={durationTone(durationDays(problem))}>{durationDays(problem)} дн.</span>
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
                                               {deadlines[problem.id] ? (
@@ -2425,13 +2479,13 @@ export default function Page() {
                                                 <button
                                                   type="button"
                                                   style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
-                                                  title="На контроль"
+                                                  title="На контроль / Снять с контроля"
                                                   aria-label="На контроль"
                                                   onClick={() => void toggleWatch(problem.id, problem.watched)}
                                                 >
                                                   👁
                                                 </button>
-                                                <button type="button" style={secondaryMiniButton} title="Дедлайн" aria-label="Дедлайн" onClick={() => openDeadline(problem.id)}>📅</button>
+                                                <button type="button" style={secondaryMiniButton} title="Поставить дедлайн" aria-label="Поставить дедлайн" onClick={() => openDeadline(problem.id)}>📅</button>
                                                 <button
                                                   type="button"
                                                   style={secondaryMiniButton}
@@ -2535,14 +2589,14 @@ export default function Page() {
                                             </thead>
                                             <tbody>
                                               {st.tasks.map((problem) => (
-                                                <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedIssueId === problem.id ? highlightedRow : undefined}>
+                                                <tr key={problem.id} id={`problem-${problem.id}`} style={highlightedProblemId === problem.id ? highlightedRow : undefined}>
                                                   <td style={cellStrong}>
                                                     <div>{problem.title}</div>
                                                     {/* technical id hidden */}
                                                   </td>
                                                   <td style={cell}>{problem.responsible_person || 'Не назначен'}</td>
                                                   <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
-                                                <td style={cell}>{durationDays(problem)} дн.</td>
+                                                <td style={{ ...cell, ...durationTone(durationDays(problem)) }}>{durationDays(problem)} дн.</td>
                                                   <td style={cell}>
                                                     {problem.photo_url ? (
                                                       <button
@@ -2567,7 +2621,7 @@ export default function Page() {
                                                       <button
                                                         type="button"
                                                         style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(problem.watched === true ? watchedIcon : {}) }}
-                                                        title="На контроль"
+                                                        title="На контроль / Снять с контроля"
                                                         aria-label="На контроль"
                                                         onClick={() => void toggleWatch(problem.id, problem.watched)}
                                                       >
@@ -2576,7 +2630,7 @@ export default function Page() {
                                                       <button
                                                         type="button"
                                                         style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
-                                                        title="Дедлайн"
+                                                        title="Поставить дедлайн"
                                                         aria-label="Дедлайн"
                                                         onClick={() => openDeadline(problem.id)}
                                                       >
@@ -3341,7 +3395,19 @@ export default function Page() {
   )
 }
 
-function KpiCard({ label, value, color, onClick }: { label: string; value: number; color: string; onClick?: () => void }) {
+function KpiCard({
+  label,
+  value,
+  color,
+  subtitle,
+  onClick,
+}: {
+  label: string
+  value: number
+  color: string
+  subtitle?: string
+  onClick?: () => void
+}) {
   const [animated, setAnimated] = useState(0)
 
   useEffect(() => {
@@ -3369,6 +3435,7 @@ function KpiCard({ label, value, color, onClick }: { label: string; value: numbe
     >
       <div style={kpiLabel}><span style={{ ...dot, background: color }} />{label}</div>
       <div style={kpiValue}>{animated}</div>
+      {subtitle ? <div style={kpiHint}>{subtitle}</div> : null}
     </button>
   )
 }
@@ -3561,33 +3628,17 @@ function ReportCard({
         <div style={{ fontWeight: 950, marginBottom: 8 }}>Главные блокеры</div>
         {blockers.length === 0 ? <div style={emptyBox}>Критичных блокеров нет</div> : null}
 
-        {blockers.filter((b) => b.severity === 'red').length ? (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontWeight: 950, marginBottom: 8 }}>🔴 Проблемы:</div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              {blockers.filter((b) => b.severity === 'red').map((b) => (
-                <div key={b.id} style={reportBlockerRow}>
-                  <div style={{ fontWeight: 900 }}>
-                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {durationDays(b)} дн.
-                  </div>
+        {blockers.length ? (
+          <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+            {blockers.slice(0, 2).map((b) => (
+              <div key={b.id} style={reportBlockerRow}>
+                <div style={{ fontWeight: 900 }}>
+                  {b.severity === 'red' ? '🔴 ' : b.severity === 'yellow' ? '🟡 ' : ''}
+                  <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} —{' '}
+                  <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {durationDays(b)} дн.
                 </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {blockers.filter((b) => b.severity === 'yellow').length ? (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 950, marginBottom: 8 }}>🟡 Риски:</div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              {blockers.filter((b) => b.severity === 'yellow').map((b) => (
-                <div key={b.id} style={reportBlockerRow}>
-                  <div style={{ fontWeight: 900 }}>
-                    <strong>{b.project_name || 'Без объекта'}</strong> — {normalizeNullable(b.stage, 'Без этапа')} — <strong>{normalizeNullable(b.responsible_person, 'Не назначен')}</strong> — {durationDays(b)} дн.
-                  </div>
-                </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
         ) : null}
       </div>
@@ -3607,6 +3658,12 @@ function taskStatusStyle(value: Severity): CSSProperties {
   return { ...smallPill, background: '#dcfce7', color: '#166534' }
 }
 
+function durationTone(days: number): CSSProperties {
+  if (days >= 7) return { color: '#DC2626', fontWeight: 900 }
+  if (days >= 4) return { color: '#D97706' }
+  return {}
+}
+
 const pageWrap: CSSProperties = { minHeight: '100vh', background: '#f3f4f6', color: '#0f172a', padding: '28px' }
 const container: CSSProperties = { maxWidth: 1480, margin: '0 auto' }
 const header: CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, marginBottom: 18 }
@@ -3617,13 +3674,14 @@ const projectSelect: CSSProperties = { border: '1px solid #cbd5e1', borderRadius
 const dateInput: CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 10, padding: '9px 12px', background: '#fff' }
 const dateFieldWrap: CSSProperties = { position: 'relative', display: 'inline-flex', alignItems: 'center' }
 const dateClearButton: CSSProperties = { position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', width: 28, height: 28, borderRadius: 999, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', cursor: 'pointer', fontWeight: 900, lineHeight: 1 }
-const kpiGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 18 }
-const kpiCard: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 18, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
+const kpiGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 32 }
+const kpiCard: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 24, minHeight: 100, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
 const kpiCardButton: CSSProperties = { ...kpiCard, cursor: 'pointer', textAlign: 'left' as const }
 const kpiLabel: CSSProperties = { fontSize: 13, color: '#475569', display: 'flex', alignItems: 'center', gap: 7 }
 const kpiValue: CSSProperties = { fontSize: 36, fontWeight: 800, marginTop: 14 }
+const kpiHint: CSSProperties = { fontSize: 12, color: '#64748b', marginTop: 6, fontWeight: 600 }
 const dot: CSSProperties = { width: 10, height: 10, borderRadius: 99, display: 'inline-block' }
-const panel: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 18, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
+const panel: CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 22, boxShadow: '0 1px 8px rgba(15,23,42,.06)' }
 const sidePanel: CSSProperties = { ...panel, alignSelf: 'start' }
 const panelHeader: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start', marginBottom: 14 }
 const sectionTitle: CSSProperties = { fontSize: 22, fontWeight: 800, marginBottom: 6 }
@@ -3669,7 +3727,7 @@ const photoInlineButton: CSSProperties = {
   textDecoration: 'none',
 }
 const listWrap: CSSProperties = { display: 'grid', gap: 10, marginTop: 12 }
-const listItem: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: '#fff' }
+const listItem: CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }
 const listTitle: CSSProperties = { fontWeight: 800, marginBottom: 4 }
 const listTitleSmall: CSSProperties = { fontWeight: 800, marginBottom: 5, fontSize: 13 }
 const metaLine: CSSProperties = { color: '#64748b', fontSize: 12, lineHeight: 1.45 }
@@ -3724,7 +3782,7 @@ const loadingBox: CSSProperties = { background: '#fff', padding: 24, borderRadiu
 const errorBox: CSSProperties = { background: '#fee2e2', color: '#991b1b', padding: 14, borderRadius: 12, marginBottom: 14, border: '1px solid #fecaca' }
 const clientModeBox: CSSProperties = { background: '#dcfce7', color: '#166534', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #bbf7d0', fontWeight: 700 }
 const warningBox: CSSProperties = { background: '#fef3c7', color: '#92400e', padding: 12, borderRadius: 12, marginBottom: 14, border: '1px solid #fde68a', fontWeight: 700 }
-const highlightedRow: CSSProperties = { background: '#fef9c3' }
+const highlightedRow: CSSProperties = { background: '#FEF3C7', transition: 'background 2s ease' }
 const actionsRow: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', minWidth: 110 }
 const actionIconButton: CSSProperties = {
   background: '#fff',
