@@ -278,36 +278,31 @@ export default function Page() {
     try {
       const { data: historyData, error } = await supabase
         .from('problem_history')
-        .select('id, action, comment, created_at, problem_id, project_name, company_id')
+        .select('*')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
         .limit(50)
 
-      if (error) throw error
+      if (error) {
+        console.error('HISTORY LOAD ERROR:', error)
+        setHistory([])
+        return
+      }
 
       const normalized = (historyData || []).map((row: any) => ({
         id: row.id,
         problem_id: row.problem_id ?? null,
-        event: String(row.action || ''),
+        event: String(row.action ?? row.event ?? ''),
         project_name: row.project_name ?? null,
-        problem_title: null,
+        problem_title: row.problem_title ?? null,
         comment: row.comment ?? null,
         created_at: row.created_at,
       }))
 
       setHistory(normalized as ProblemHistory[])
-      return
     } catch (e) {
-      // Fallback for legacy schema (event/problem_title). Keeps dashboard functional if DB hasn't been migrated.
-      const { data, error } = await supabase
-        .from('problem_history')
-        .select('id, problem_id, event, project_name, problem_title, comment, created_at')
-        .eq('company_id', companyId)
-        .order('created_at', { ascending: false })
-        .limit(50)
-
-      if (error) throw error
-      setHistory((data || []) as ProblemHistory[])
+      console.error('HISTORY LOAD FAILED:', e)
+      setHistory([])
     }
   }
 
@@ -1111,8 +1106,8 @@ export default function Page() {
   }
 
   const closeProblem = async (problemId: string) => {
-    if (!companyId) {
-      console.error('NO COMPANY ID - cannot save')
+    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+      console.error('Invalid companyId, skipping save')
       return
     }
 
@@ -1156,28 +1151,34 @@ export default function Page() {
   }
 
   const reopenProblem = async (problemId: string) => {
-    if (!companyId) {
-      console.error('No companyId')
+    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+      console.error('Invalid companyId, skipping save')
       return
     }
 
-    const { error } = await supabase
-      .from('problems')
-      .update({
-        is_active: true,
-        closed_at: null,
-      })
-      .eq('id', problemId)
-      .eq('company_id', companyId)
+    const updates = { is_active: true, closed_at: null }
+    console.log('SAVING TO SUPABASE:', { problemId, companyId, value: updates })
+    const res = await fetch('/api/problems/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: problemId, company_id: companyId, updates }),
+    })
+    const result = await res.json().catch(() => null)
+    console.log('UPDATE RESULT:', result)
+    const error = result?.error
+    if (error) {
+      console.error('UPDATE ERROR:', error)
+      return
+    }
 
-    if (!error) {
+    if (res.ok) {
       setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
     }
   }
 
   const toggleWatch = async (problemId: string) => {
-    if (!companyId) {
-      console.error('NO COMPANY ID - cannot save')
+    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+      console.error('Invalid companyId, skipping save')
       return
     }
     const problem = problems.find((x) => x.id === problemId)
@@ -1234,8 +1235,8 @@ export default function Page() {
   }
 
   async function saveDeadline(problem: Problem) {
-    if (!companyId) {
-      console.error('NO COMPANY ID - cannot save')
+    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+      console.error('Invalid companyId, skipping save')
       return
     }
     const date = deadlineDraft
@@ -1301,8 +1302,8 @@ export default function Page() {
   }
 
   async function clearDeadline(problem: Problem) {
-    if (!companyId) {
-      console.error('NO COMPANY ID - cannot save')
+    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+      console.error('Invalid companyId, skipping save')
       return
     }
     const problemId = problem.id
