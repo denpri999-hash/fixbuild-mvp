@@ -245,7 +245,7 @@ export default function Page() {
   async function fetchProblems() {
     let query = supabase
       .from('problems')
-      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key, deadline, watched')
+      .select('id, title, status, severity, first_seen_at, last_seen_at, days_count, is_active, closed_at, project_name, project_id, company_id, stage, material, reason, responsible_person, sender_phone, photo_url, problem_key, grouping_key, deadline, watched')
       .eq('company_id', companyId)
       .order('last_seen_at', { ascending: false })
 
@@ -1107,30 +1107,44 @@ export default function Page() {
 
   const closeProblem = async (problemId: string) => {
     if (!companyId) {
-      console.error('No companyId')
+      console.error('NO COMPANY ID - cannot save')
       return
     }
 
-    const { error } = await supabase
-      .from('problems')
-      .update({
-        is_active: false,
-        closed_at: new Date().toISOString(),
+    setRemovingProblemIds((cur) => ({ ...cur, [problemId]: true }))
+    const value = { is_active: false, closed_at: new Date().toISOString() }
+
+    console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
+    try {
+      const { data, error } = await supabase
+        .from('problems')
+        .update(value)
+        .eq('id', problemId)
+        .eq('company_id', companyId)
+
+      console.log('SUPABASE RESULT:', { data, error })
+
+      if (error) {
+        console.error('close problem:', error)
+        showToast('Не удалось закрыть задачу')
+        return
+      }
+
+      setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      setDeadlines((prev) => {
+        const next = { ...prev }
+        delete next[problemId]
+        return next
       })
-      .eq('id', problemId)
-      .eq('company_id', companyId)
-
-    if (error) {
-      console.error('close problem:', error)
-      showToast('Не удалось закрыть задачу')
-      return
+    } finally {
+      window.setTimeout(() => {
+        setRemovingProblemIds((cur) => {
+          const next = { ...cur }
+          delete next[problemId]
+          return next
+        })
+      }, 280)
     }
-    setProblems((prev) => prev.filter((p) => p.id !== problemId))
-    setDeadlines((prev) => {
-      const next = { ...prev }
-      delete next[problemId]
-      return next
-    })
   }
 
   const reopenProblem = async (problemId: string) => {
@@ -1154,15 +1168,21 @@ export default function Page() {
   }
 
   const toggleWatch = async (problemId: string) => {
-    if (!companyId) return
+    if (!companyId) {
+      console.error('NO COMPANY ID - cannot save')
+      return
+    }
     const problem = problems.find((x) => x.id === problemId)
     if (!problem) return
     const newWatched = !(problem.watched === true)
-    const { error } = await supabase
+    const value = newWatched
+    console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
+    const { data, error } = await supabase
       .from('problems')
       .update({ watched: newWatched })
       .eq('id', problemId)
       .eq('company_id', companyId)
+    console.log('SUPABASE RESULT:', { data, error })
     if (error) {
       console.error('watch update:', error)
       showToast('Не удалось обновить контроль')
@@ -1198,17 +1218,25 @@ export default function Page() {
   }
 
   async function saveDeadline(problem: Problem) {
+    if (!companyId) {
+      console.error('NO COMPANY ID - cannot save')
+      return
+    }
     const date = deadlineDraft
     if (!date) {
       setDeadlineEditingId(null)
       return
     }
 
-    const { error } = await supabase
+    const problemId = problem.id
+    const value = date
+    console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
+    const { data, error } = await supabase
       .from('problems')
       .update({ deadline: date })
       .eq('id', problem.id)
       .eq('company_id', companyId)
+    console.log('SUPABASE RESULT:', { data, error })
 
     if (error) {
       console.error('deadline save:', error)
@@ -1245,11 +1273,19 @@ export default function Page() {
   }
 
   async function clearDeadline(problem: Problem) {
-    const { error } = await supabase
+    if (!companyId) {
+      console.error('NO COMPANY ID - cannot save')
+      return
+    }
+    const problemId = problem.id
+    const value = null
+    console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
+    const { data, error } = await supabase
       .from('problems')
       .update({ deadline: null })
       .eq('id', problem.id)
       .eq('company_id', companyId)
+    console.log('SUPABASE RESULT:', { data, error })
 
     if (error) {
       console.error('deadline clear:', error)
@@ -1324,18 +1360,7 @@ export default function Page() {
     }
   }
 
-  function requestClose(problemId: string) {
-    setRemovingProblemIds((cur) => ({ ...cur, [problemId]: true }))
-    window.setTimeout(() => {
-      void closeProblem(problemId).finally(() => {
-        setRemovingProblemIds((cur) => {
-          const next = { ...cur }
-          delete next[problemId]
-          return next
-        })
-      })
-    }, 280)
-  }
+  // requestClose removed: mobile+desktop use only closeProblem
 
   const redCount = activeProblemsBase.filter((p) => p.severity === 'red').length
   const yellowCount = activeProblemsBase.filter((p) => p.severity === 'yellow').length
@@ -1875,7 +1900,7 @@ export default function Page() {
                               style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
                               title="Закрыть проблему"
                               aria-label="Закрыть"
-                              onClick={() => requestClose(problem.id)}
+                              onClick={() => void closeProblem(problem.id)}
                               disabled={closingId === problem.id}
                             >
                               ✕
