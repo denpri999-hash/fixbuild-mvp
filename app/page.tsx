@@ -1303,7 +1303,7 @@ export default function Page() {
         const r = await fetch('/api/whatsapp/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companyId, phone: employee.phone, message }),
+          body: JSON.stringify({ phone: employee.phone, message }),
         })
         const waResult = await r.json().catch(() => null)
         console.log('WHATSAPP RESULT:', waResult)
@@ -1359,7 +1359,7 @@ export default function Page() {
         const r = await fetch('/api/whatsapp/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companyId, phone: employee.phone, message }),
+          body: JSON.stringify({ phone: employee.phone, message }),
         })
         if (!r.ok) showToast('Срок снят, не удалось отправить WhatsApp')
       } catch {
