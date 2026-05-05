@@ -1831,7 +1831,7 @@ export default function Page() {
                     <option key={stage} value={stage}>Этап: {stage}</option>
                   ))}
                 </select>
-                <div style={isMobile ? { display: 'flex', flexDirection: 'row', gap: 8 } : undefined}>
+                <div style={isMobile ? { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8 } : undefined}>
                   <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('all')}>Все</button>
                   <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('red')}>Проблемы</button>
                   <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('yellow')}>Риски</button>
@@ -2099,6 +2099,7 @@ export default function Page() {
                         <td style={cell}>
                           <div style={personCellWrap}>
                             {(() => {
+                              const responsibleName = (problem.responsible_person || '').trim()
                               const rp = (problem.responsible_person || '').toLowerCase().trim()
                               const employee = rp
                                 ? employees.find((e) => (e.name || '').toLowerCase().trim() === rp)
@@ -2120,9 +2121,37 @@ export default function Page() {
                                     {problem.responsible_person || 'Не назначен'}
                                   </button>
                                   {openContactId === `p_${problem.id}` ? (
-                                    <div style={{ ...personTooltip, minWidth: 200 }}>
+                                    <div style={personTooltip}>
                                       <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
-                                      <div style={metaLine}>{phoneTel || 'Телефон не указан'}</div>
+                                      {!employee?.phone ? (
+                                        <div style={{ marginTop: 6 }}>
+                                          <input
+                                            type="tel"
+                                            placeholder="Введите номер"
+                                            style={{ border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 13, width: '100%' }}
+                                            onBlur={async (e) => {
+                                              const phone = e.target.value.trim()
+                                              if (!phone) return
+                                              await fetch('/api/employees', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                  company_id: companyId,
+                                                  name: responsibleName,
+                                                  phone,
+                                                  is_active: true,
+                                                }),
+                                              })
+                                              void fetchEmployees()
+                                            }}
+                                          />
+                                          <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>
+                                            Введите и уйдите с поля — сохранится
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div style={metaLine}>{phoneTel}</div>
+                                      )}
                                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
                                         <a
                                           href={canCall ? `tel:${phoneTel}` : undefined}
@@ -3677,7 +3706,18 @@ const countBadgeYellow: CSSProperties = { ...smallPill, background: '#fef3c7', c
 
 const personCellWrap: CSSProperties = { position: 'relative', display: 'inline-block' }
 const personButton: CSSProperties = { background: 'transparent', border: 'none', padding: 0, margin: 0, cursor: 'pointer', fontWeight: 900, color: '#0f172a', textAlign: 'left' as const }
-const personTooltip: CSSProperties = { position: 'absolute', top: 'calc(100% + 8px)', left: 0, width: 220, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, boxShadow: '0 10px 28px rgba(15,23,42,.14)', zIndex: 40 }
+const personTooltip: CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 8px)',
+  left: 0,
+  background: 'white',
+  border: '1px solid #E5E7EB',
+  borderRadius: 8,
+  boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+  padding: 12,
+  minWidth: 220,
+  zIndex: 9999,
+}
 const callLink: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a', fontWeight: 900, textDecoration: 'none' }
 
 function eventLabel(type: EventsFilter) {
