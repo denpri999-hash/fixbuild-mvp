@@ -189,6 +189,7 @@ export default function Page() {
   const [errorText, setErrorText] = useState('')
   const [problemFilter, setProblemFilter] = useState<ProblemFilter>('all')
   const [selectedProject, setSelectedProject] = useState('all')
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [closingId, setClosingId] = useState<string | null>(null)
@@ -700,9 +701,14 @@ export default function Page() {
     return problems
       .filter((p) => p.status === 'open' && p.is_active !== false)
       .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
+      .filter((p) => selectedProjectFilter === 'all' || p.project_name === selectedProjectFilter)
       .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
       .filter((p) => filterEmployee === 'all' || (p.responsible_person || 'Не назначен') === filterEmployee)
-  }, [problems, selectedProject, dateFrom, dateTo, filterEmployee])
+  }, [problems, selectedProject, selectedProjectFilter, dateFrom, dateTo, filterEmployee])
+
+  const uniqueProjects = useMemo(() => {
+    return Array.from(new Set(problems.map((p) => p.project_name).filter(Boolean) as string[]))
+  }, [problems])
 
   const stageOptions = useMemo(() => {
     const set = new Set<string>()
@@ -1815,6 +1821,12 @@ export default function Page() {
                 <div style={sectionSubTitle}>Открытые проблемы и риски по всем объектам</div>
               </div>
               <div style={actionRow}>
+                <select style={projectSelect} value={selectedProjectFilter} onChange={(e) => setSelectedProjectFilter(e.target.value)}>
+                  <option value="all">Объект: все</option>
+                  {uniqueProjects.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
                 <select style={projectSelect} value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
                   <option value="all">Этап: все</option>
                   {stageOptions.map((stage) => (
@@ -2092,6 +2104,22 @@ export default function Page() {
                                 <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
                                 <div style={metaLine}>{normalizePhoneForTel(problem.sender_phone)}</div>
                                 <a href={`tel:${normalizePhoneForTel(problem.sender_phone)}`} style={callLink}>📞 Позвонить</a>
+                                <a
+                                  href={`https://wa.me/${String(problem.sender_phone || '').replace(/\D/g, '')}`}
+                                  target="_blank"
+                                  style={{
+                                    backgroundColor: '#25D366',
+                                    color: 'white',
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    textDecoration: 'none',
+                                    fontSize: '13px',
+                                    display: 'inline-block',
+                                    marginTop: 8,
+                                  }}
+                                >
+                                  WhatsApp
+                                </a>
                               </div>
                             ) : null}
                           </div>
@@ -2281,6 +2309,33 @@ export default function Page() {
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
                                               <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
+                                              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                                                <button
+                                                  type="button"
+                                                  style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
+                                                  title="На контроль"
+                                                  aria-label="На контроль"
+                                                  onClick={() => void toggleWatch(problem.id)}
+                                                >
+                                                  👁
+                                                </button>
+                                                <button type="button" style={secondaryMiniButton} title="Дедлайн" aria-label="Дедлайн" onClick={() => openDeadline(problem.id)}>📅</button>
+                                                <button
+                                                  type="button"
+                                                  style={secondaryMiniButton}
+                                                  title="Запросить обновление"
+                                                  aria-label="Запросить обновление"
+                                                  onClick={() => {
+                                                    const project = problem.project_name || 'объект'
+                                                    const stage = problem.stage || 'этап'
+                                                    const text = `Добрый день! Нужен статус по объекту ${project}, этап: ${stage}. Напишите актуальный статус текущей ситуации.`
+                                                    setUpdateModal({ title: 'Запрос обновления', text })
+                                                  }}
+                                                >
+                                                  🔄
+                                                </button>
+                                                <button type="button" style={secondaryMiniButton} title="Закрыть задачу" aria-label="Закрыть задачу" onClick={() => void closeProblem(problem.id)}>×</button>
+                                              </div>
                                               {/* technical id hidden */}
                                               {problem.photo_url ? (
                                                 <button
@@ -2312,6 +2367,7 @@ export default function Page() {
                                                 <th style={cellHeader}>Статус</th>
                                                 <th style={cellHeader}>Длится</th>
                                                 <th style={cellHeader}>Фото</th>
+                                                <th style={cellHeader}>Действия</th>
                                               </tr>
                                             </thead>
                                             <tbody>
@@ -2342,6 +2398,51 @@ export default function Page() {
                                                         📷 Фото
                                                       </button>
                                                     ) : '-'}
+                                                  </td>
+                                                  <td style={cell}>
+                                                    <div style={actionsRow}>
+                                                      <button
+                                                        type="button"
+                                                        style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(problem.watched === true ? watchedIcon : {}) }}
+                                                        title="На контроль"
+                                                        aria-label="На контроль"
+                                                        onClick={() => void toggleWatch(problem.id)}
+                                                      >
+                                                        👁
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                                                        title="Дедлайн"
+                                                        aria-label="Дедлайн"
+                                                        onClick={() => openDeadline(problem.id)}
+                                                      >
+                                                        📅
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize }}
+                                                        title="Запросить обновление"
+                                                        aria-label="Запросить обновление"
+                                                        onClick={() => {
+                                                          const project = problem.project_name || 'объект'
+                                                          const stage = problem.stage || 'этап'
+                                                          const text = `Добрый день! Нужен статус по объекту ${project}, этап: ${stage}. Напишите актуальный статус текущей ситуации.`
+                                                          setUpdateModal({ title: 'Запрос обновления', text })
+                                                        }}
+                                                      >
+                                                        🔄
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        style={{ ...actionIconButtonDanger, width: actionIconSize, height: actionIconSize }}
+                                                        title="Закрыть задачу"
+                                                        aria-label="Закрыть задачу"
+                                                        onClick={() => void closeProblem(problem.id)}
+                                                      >
+                                                        ×
+                                                      </button>
+                                                    </div>
                                                   </td>
                                                 </tr>
                                               ))}
