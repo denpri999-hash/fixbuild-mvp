@@ -335,9 +335,10 @@ export default function Page() {
 
   async function fetchEmployees() {
     if (!companyId) return
-    const { data, error } = await supabase.from('employees').select('*').eq('company_id', companyId)
-    if (error) throw error
-    setEmployees((data || []) as Employee[])
+    const res = await fetch(`/api/employees?company_id=${encodeURIComponent(companyId)}`)
+    const json = await res.json().catch(() => null)
+    if (!res.ok || json?.error) throw (json?.error || new Error('Failed to load employees'))
+    setEmployees((json?.data || []) as Employee[])
   }
 
   async function fetchAll() {
@@ -475,6 +476,10 @@ export default function Page() {
       setSelectedProject('all')
       fetchAll()
     }
+  }, [companyId])
+
+  useEffect(() => {
+    console.log('companyId on save:', companyId)
   }, [companyId])
 
   useEffect(() => {
@@ -1116,11 +1121,14 @@ export default function Page() {
 
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
     try {
-      const { data, error } = await supabase
-        .from('problems')
-        .update(value)
-        .eq('id', problemId)
-        .eq('company_id', companyId)
+      const res = await fetch('/api/problems/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: problemId, company_id: companyId, updates: value }),
+      })
+      const json = await res.json().catch(() => null)
+      const data = json?.data
+      const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
 
       console.log('SUPABASE RESULT:', { data, error })
 
@@ -1177,11 +1185,14 @@ export default function Page() {
     const newWatched = !(problem.watched === true)
     const value = newWatched
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
-    const { data, error } = await supabase
-      .from('problems')
-      .update({ watched: newWatched })
-      .eq('id', problemId)
-      .eq('company_id', companyId)
+    const res = await fetch('/api/problems/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: problemId, company_id: companyId, updates: { watched: newWatched } }),
+    })
+    const json = await res.json().catch(() => null)
+    const data = json?.data
+    const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
     console.log('SUPABASE RESULT:', { data, error })
     if (error) {
       console.error('watch update:', error)
@@ -1231,11 +1242,14 @@ export default function Page() {
     const problemId = problem.id
     const value = date
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
-    const { data, error } = await supabase
-      .from('problems')
-      .update({ deadline: date })
-      .eq('id', problem.id)
-      .eq('company_id', companyId)
+    const res = await fetch('/api/problems/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: problemId, company_id: companyId, updates: { deadline: date } }),
+    })
+    const json = await res.json().catch(() => null)
+    const data = json?.data
+    const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
     console.log('SUPABASE RESULT:', { data, error })
 
     if (error) {
@@ -1280,11 +1294,14 @@ export default function Page() {
     const problemId = problem.id
     const value = null
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
-    const { data, error } = await supabase
-      .from('problems')
-      .update({ deadline: null })
-      .eq('id', problem.id)
-      .eq('company_id', companyId)
+    const res = await fetch('/api/problems/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: problemId, company_id: companyId, updates: { deadline: null } }),
+    })
+    const json = await res.json().catch(() => null)
+    const data = json?.data
+    const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
     console.log('SUPABASE RESULT:', { data, error })
 
     if (error) {
@@ -1330,8 +1347,13 @@ export default function Page() {
     }
     setEmployeeSaving(true)
     try {
-      const { error } = await supabase.from('employees').insert({ company_id: companyId, name, phone, is_active: true })
-      if (error) throw error
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, name, phone, is_active: true }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) throw (json?.error || new Error('Failed to save employee'))
       setNewEmployeeName('')
       setNewEmployeePhone('')
       setEmployeeAddOpen(false)
@@ -1348,8 +1370,9 @@ export default function Page() {
   async function removeEmployee(employeeId: string) {
     setEmployeeSaving(true)
     try {
-      const { error } = await supabase.from('employees').delete().eq('id', employeeId)
-      if (error) throw error
+      const res = await fetch(`/api/employees?id=${encodeURIComponent(employeeId)}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) throw (json?.error || new Error('Failed to remove employee'))
       await fetchEmployees()
       showToast('Сотрудник удалён')
     } catch (e) {
