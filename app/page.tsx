@@ -2119,24 +2119,7 @@ export default function Page() {
                                         >
                                           📞 Позвонить
                                         </a>
-                                        {employee?.phone && (
-                                          <a
-                                            href={`https://wa.me/${waDigits}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            style={{
-                                              backgroundColor: '#25D366',
-                                              color: 'white',
-                                              padding: '6px 12px',
-                                              borderRadius: '6px',
-                                              textDecoration: 'none',
-                                              fontSize: '13px',
-                                              marginLeft: '8px',
-                                            }}
-                                          >
-                                            WhatsApp
-                                          </a>
-                                        )}
+                                        {/* WhatsApp button removed by request */}
                                       </div>
                                     </div>
                                   ) : null}
