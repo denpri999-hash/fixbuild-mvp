@@ -1212,11 +1212,8 @@ export default function Page() {
     const problem = problems.find((x) => x.id === problemId)
     if (!problem) return
     const newWatched = !(problem.watched === true)
-    const prevWatched = Boolean(problem.watched)
     const value = newWatched
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
-    // optimistic update so "Контроль" reacts instantly
-    setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: newWatched } : p)))
     const res = await fetch('/api/problems/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1226,8 +1223,6 @@ export default function Page() {
     console.log('UPDATE RESULT:', result)
     if (result?.error) {
       console.error('UPDATE ERROR:', result.error)
-      // rollback optimistic update
-      setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: prevWatched } : p)))
       return
     }
     const data = result?.data
@@ -1236,12 +1231,9 @@ export default function Page() {
     if (error) {
       console.error('watch update:', error)
       showToast('Не удалось обновить контроль')
-      // rollback optimistic update
-      setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: prevWatched } : p)))
       return
     }
-    // ensure latest server state
-    void fetchAll()
+    setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: newWatched } : p)))
   }
 
   function formatDeadlineLabel(value: string) {
@@ -1714,7 +1706,22 @@ export default function Page() {
           <section style={panelR} id="active-issues">
             <div style={panelHeader}>
               <div>
-                <div style={sectionTitle}>Активные проблемы</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={sectionTitle}>Активные проблемы</div>
+                  <span
+                    style={{
+                      backgroundColor: '#EF4444',
+                      color: 'white',
+                      borderRadius: '12px',
+                      padding: '2px 8px',
+                      fontSize: '14px',
+                      marginLeft: '8px',
+                      fontWeight: 900,
+                    }}
+                  >
+                    {problems.length}
+                  </span>
+                </div>
                 <div style={sectionSubTitle}>Открытые проблемы и риски по всем объектам</div>
               </div>
               <div style={actionRow}>
