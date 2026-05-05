@@ -96,6 +96,61 @@ type EventsFilter = 'all' | 'problems' | 'photo' | 'statuses'
 const role = 'admin'
 type DashboardTab = 'problems' | 'events' | 'photos' | 'closed' | 'history' | 'journal'
 
+function BrandHeader({ isMobile }: { isMobile: boolean }) {
+  const iconSize = isMobile ? 28 : 32
+  const titleSize = isMobile ? '17px' : '20px'
+  const showSubtitle = !isMobile
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+      <svg
+        width={iconSize}
+        height={iconSize}
+        viewBox="0 0 32 32"
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ flexShrink: 0 }}
+      >
+        <rect width="32" height="32" rx="6" fill="#1E293B" />
+        <path
+          d="M16 5 L27 12 L27 27 L5 27 L5 12 Z"
+          fill="none"
+          stroke="white"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M11 18 L14 22 L21 13"
+          fill="none"
+          stroke="#16A34A"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontWeight: 700,
+            fontSize: titleSize,
+            color: '#0F172A',
+            lineHeight: '1.2',
+            letterSpacing: '-0.3px',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          FixBuild
+        </div>
+        {showSubtitle ? (
+          <div style={{ fontWeight: 500, fontSize: '12px', color: '#64748B', lineHeight: '1.2' }}>
+            Контроль проблем и сроков
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 const severityOrder: Record<string, number> = {
   red: 1,
   yellow: 2,
@@ -1560,7 +1615,7 @@ export default function Page() {
   const attentionCount = activeProblemsBase.length
 
   if (companyLoading) {
-    return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
+    return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild...</div></main>
   }
 
   if (!companyId) {
@@ -1568,7 +1623,7 @@ export default function Page() {
   }
 
   if (loading) {
-    return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild Dashboard...</div></main>
+    return <main style={pageWrap}><div style={loadingBox}>Загрузка FixBuild...</div></main>
   }
 
   const pageWrapR: CSSProperties = { ...pageWrap, padding: isMobile ? 12 : 28 }
@@ -1661,8 +1716,7 @@ export default function Page() {
           ) : (
             <>
               <div>
-                <h1 style={titleR}>FixBuild Dashboard</h1>
-                <p style={subtitle}>Панель директора: реальные проблемы, риски, этапы, причины, объекты, фотоархив и сотрудники</p>
+                <BrandHeader isMobile={isMobile} />
               </div>
 
               <div style={filtersRowR}>
