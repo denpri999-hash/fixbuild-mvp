@@ -1103,6 +1103,7 @@ export default function Page() {
   }
 
   const closeProblem = async (problemId: string) => {
+    console.log('CALLED: closeProblem', { problemId, companyId })
     if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
@@ -1148,6 +1149,7 @@ export default function Page() {
   }
 
   const reopenProblem = async (problemId: string) => {
+    console.log('CALLED: reopenProblem', { problemId, companyId })
     if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
@@ -1174,6 +1176,7 @@ export default function Page() {
   }
 
   const toggleWatch = async (problemId: string) => {
+    console.log('CALLED: toggleWatch', { problemId, companyId })
     if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
@@ -1232,6 +1235,7 @@ export default function Page() {
   }
 
   async function saveDeadline(problem: Problem, dateOverride?: string) {
+    console.log('CALLED: saveDeadline', { problemId: problem?.id, companyId })
     if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
@@ -1299,6 +1303,7 @@ export default function Page() {
   }
 
   async function clearDeadline(problem: Problem) {
+    console.log('CALLED: clearDeadline', { problemId: problem?.id, companyId })
     if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
