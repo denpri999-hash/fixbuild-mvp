@@ -1281,9 +1281,15 @@ export default function Page() {
     setDeadlines((prev) => ({ ...prev, [problem.id]: date }))
     setDeadlineEditingId(null)
 
-    const employee = employees.find((e) =>
-      (e.name || '').toLowerCase().trim() === (problem.responsible_person || '').toLowerCase().trim()
-    )
+    console.log('SEARCH:', {
+      responsible: problem.responsible_person,
+      employeeNames: employees.map((e) => e.name),
+    })
+    const employee = employees.find((e) => {
+      const eName = (e.name || '').toLowerCase().trim()
+      const rName = (problem.responsible_person || '').toLowerCase().trim()
+      return eName === rName || eName.includes(rName) || rName.includes(eName)
+    })
     console.log('EMPLOYEE FOUND:', employee)
     console.log('ALL EMPLOYEES:', employees)
 
@@ -1816,8 +1822,16 @@ export default function Page() {
                               onClick={() => {
                                 const date = pendingDeadline[problem.id]
                                 if (!date) return
-                                const year = date.split('-')[0] || ''
-                                if (year.length !== 4) return
+                                const year = parseInt((date.split('-')[0] || '').trim())
+                                if (year < 2024 || year > 2030) {
+                                  alert(`Неправильный год: ${year}. Введите дату заново.`)
+                                  setPendingDeadline((prev) => {
+                                    const next = { ...prev }
+                                    delete next[problem.id]
+                                    return next
+                                  })
+                                  return
+                                }
                                 void saveDeadline(problem, date)
                                 setPendingDeadline((prev) => {
                                   const next = { ...prev }
@@ -2021,8 +2035,16 @@ export default function Page() {
                                 onClick={() => {
                                   const date = pendingDeadline[problem.id]
                                   if (!date) return
-                                  const year = date.split('-')[0] || ''
-                                  if (year.length !== 4) return
+                                  const year = parseInt((date.split('-')[0] || '').trim())
+                                  if (year < 2024 || year > 2030) {
+                                    alert(`Неправильный год: ${year}. Введите дату заново.`)
+                                    setPendingDeadline((prev) => {
+                                      const next = { ...prev }
+                                      delete next[problem.id]
+                                      return next
+                                    })
+                                    return
+                                  }
                                   void saveDeadline(problem, date)
                                   setPendingDeadline((prev) => {
                                     const next = { ...prev }
