@@ -2109,7 +2109,7 @@ export default function Page() {
                                     {problem.responsible_person || 'Не назначен'}
                                   </button>
                                   {openContactId === `p_${problem.id}` ? (
-                                    <div style={personTooltip}>
+                                    <div style={{ ...personTooltip, minWidth: 200 }}>
                                       <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
                                       <div style={metaLine}>{phoneTel || 'Телефон не указан'}</div>
                                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
@@ -2329,6 +2329,20 @@ export default function Page() {
                                                 {severityLabel(problem.severity)} · {durationDays(problem)} дн.
                                               </div>
                                               <div style={{ fontWeight: 900 }}>{problem.title}</div>
+                                              {deadlines[problem.id] ? (
+                                                <span style={{ color: '#DC2626', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                                                  ⏰ Срок: {formatDate(deadlines[problem.id])}
+                                                  <button
+                                                    type="button"
+                                                    aria-label="Убрать срок"
+                                                    title="Убрать срок"
+                                                    style={deadlineClearButton}
+                                                    onClick={() => void clearDeadline(problem)}
+                                                  >
+                                                    ×
+                                                  </button>
+                                                </span>
+                                              ) : null}
                                               <div style={metaLine}>{normalizeNullable(problem.responsible_person, 'Не назначен')}</div>
                                               <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                                                 <button
@@ -2357,6 +2371,62 @@ export default function Page() {
                                                 </button>
                                                 <button type="button" style={secondaryMiniButton} title="Закрыть задачу" aria-label="Закрыть задачу" onClick={() => void closeProblem(problem.id)}>×</button>
                                               </div>
+                                              {deadlineEditingId === problem.id ? (
+                                                <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                  <input
+                                                    style={dateInput}
+                                                    type="date"
+                                                    value={pendingDeadline[problem.id] || deadlines[problem.id] || ''}
+                                                    onChange={(e) => {
+                                                      const next = e.target.value
+                                                      setPendingDeadline((prev) => ({
+                                                        ...prev,
+                                                        [problem.id]: next,
+                                                      }))
+                                                    }}
+                                                  />
+                                                  <button
+                                                    type="button"
+                                                    style={secondaryButton}
+                                                    onClick={() => {
+                                                      const date = pendingDeadline[problem.id]
+                                                      if (!date) return
+                                                      const year = parseInt((date.split('-')[0] || '').trim())
+                                                      if (year < 2024 || year > 2030) {
+                                                        alert(`Неправильный год: ${year}. Введите дату заново.`)
+                                                        setPendingDeadline((prev) => {
+                                                          const next = { ...prev }
+                                                          delete next[problem.id]
+                                                          return next
+                                                        })
+                                                        return
+                                                      }
+                                                      void saveDeadline(problem, date)
+                                                      setPendingDeadline((prev) => {
+                                                        const next = { ...prev }
+                                                        delete next[problem.id]
+                                                        return next
+                                                      })
+                                                    }}
+                                                  >
+                                                    ОК
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    style={secondaryButton}
+                                                    onClick={() => {
+                                                      setDeadlineEditingId(null)
+                                                      setPendingDeadline((prev) => {
+                                                        const next = { ...prev }
+                                                        delete next[problem.id]
+                                                        return next
+                                                      })
+                                                    }}
+                                                  >
+                                                    Отмена
+                                                  </button>
+                                                </div>
+                                              ) : null}
                                               {/* technical id hidden */}
                                               {problem.photo_url ? (
                                                 <button
@@ -2464,6 +2534,78 @@ export default function Page() {
                                                         ×
                                                       </button>
                                                     </div>
+                                                    {deadlines[problem.id] ? (
+                                                      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                                        <span style={{ color: '#DC2626', fontSize: 12 }}>
+                                                          ⏰ Срок: {formatDate(deadlines[problem.id])}
+                                                        </span>
+                                                        <button
+                                                          type="button"
+                                                          aria-label="Убрать срок"
+                                                          title="Убрать срок"
+                                                          style={deadlineClearButton}
+                                                          onClick={() => void clearDeadline(problem)}
+                                                        >
+                                                          ×
+                                                        </button>
+                                                      </div>
+                                                    ) : null}
+                                                    {deadlineEditingId === problem.id ? (
+                                                      <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                        <input
+                                                          style={dateInput}
+                                                          type="date"
+                                                          value={pendingDeadline[problem.id] || deadlines[problem.id] || ''}
+                                                          onChange={(e) => {
+                                                            const next = e.target.value
+                                                            setPendingDeadline((prev) => ({
+                                                              ...prev,
+                                                              [problem.id]: next,
+                                                            }))
+                                                          }}
+                                                        />
+                                                        <button
+                                                          type="button"
+                                                          style={secondaryButton}
+                                                          onClick={() => {
+                                                            const date = pendingDeadline[problem.id]
+                                                            if (!date) return
+                                                            const year = parseInt((date.split('-')[0] || '').trim())
+                                                            if (year < 2024 || year > 2030) {
+                                                              alert(`Неправильный год: ${year}. Введите дату заново.`)
+                                                              setPendingDeadline((prev) => {
+                                                                const next = { ...prev }
+                                                                delete next[problem.id]
+                                                                return next
+                                                              })
+                                                              return
+                                                            }
+                                                            void saveDeadline(problem, date)
+                                                            setPendingDeadline((prev) => {
+                                                              const next = { ...prev }
+                                                              delete next[problem.id]
+                                                              return next
+                                                            })
+                                                          }}
+                                                        >
+                                                          ОК
+                                                        </button>
+                                                        <button
+                                                          type="button"
+                                                          style={secondaryButton}
+                                                          onClick={() => {
+                                                            setDeadlineEditingId(null)
+                                                            setPendingDeadline((prev) => {
+                                                              const next = { ...prev }
+                                                              delete next[problem.id]
+                                                              return next
+                                                            })
+                                                          }}
+                                                        >
+                                                          Отмена
+                                                        </button>
+                                                      </div>
+                                                    ) : null}
                                                   </td>
                                                 </tr>
                                               ))}
