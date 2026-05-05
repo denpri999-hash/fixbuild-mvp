@@ -1314,15 +1314,13 @@ export default function Page() {
     }
   }
 
-  const toggleWatch = async (problemId: string) => {
-    console.log('CALLED: toggleWatch', { problemId, companyId })
+  const toggleWatch = async (problemId: string, currentWatched?: boolean | null) => {
+    console.log('CALLED: toggleWatch', { problemId, companyId, currentWatched })
     if (!companyId) {
       console.error('No companyId, skipping save')
       return
     }
-    const problem = problems.find((x) => x.id === problemId)
-    if (!problem) return
-    const newWatched = !(problem.watched === true)
+    const newWatched = !(currentWatched === true)
     const value = newWatched
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
     const res = await fetch('/api/problems/update', {
@@ -1948,7 +1946,7 @@ export default function Page() {
                             style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
                             title="Взять на контроль"
                             aria-label="Взять на контроль"
-                            onClick={() => void toggleWatch(problem.id)}
+                            onClick={() => void toggleWatch(problem.id, problem.watched)}
                           >
                             👁
                           </button>
@@ -2089,39 +2087,62 @@ export default function Page() {
                         <td style={cell}>{problem.reason || 'прочее'}</td>
                         <td style={cell}>
                           <div style={personCellWrap}>
-                            <button
-                              type="button"
-                              style={personButton}
-                              onMouseEnter={() => !isMobile && setOpenContactId(`p_${problem.id}`)}
-                              onMouseLeave={() => !isMobile && setOpenContactId((cur) => (cur === `p_${problem.id}` ? null : cur))}
-                              onClick={() => handlePersonClick(`p_${problem.id}`, normalizePhoneForTel(problem.sender_phone))}
-                              title={problem.sender_phone ? 'Показать телефон' : undefined}
-                            >
-                              {problem.responsible_person || 'Не назначен'}
-                            </button>
-                            {openContactId === `p_${problem.id}` && problem.sender_phone ? (
-                              <div style={personTooltip}>
-                                <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
-                                <div style={metaLine}>{normalizePhoneForTel(problem.sender_phone)}</div>
-                                <a href={`tel:${normalizePhoneForTel(problem.sender_phone)}`} style={callLink}>📞 Позвонить</a>
-                                <a
-                                  href={`https://wa.me/${String(problem.sender_phone || '').replace(/\D/g, '')}`}
-                                  target="_blank"
-                                  style={{
-                                    backgroundColor: '#25D366',
-                                    color: 'white',
-                                    padding: '6px 12px',
-                                    borderRadius: '6px',
-                                    textDecoration: 'none',
-                                    fontSize: '13px',
-                                    display: 'inline-block',
-                                    marginTop: 8,
-                                  }}
-                                >
-                                  WhatsApp
-                                </a>
-                              </div>
-                            ) : null}
+                            {(() => {
+                              const rp = (problem.responsible_person || '').toLowerCase().trim()
+                              const employee = rp
+                                ? employees.find((e) => (e.name || '').toLowerCase().trim() === rp)
+                                : undefined
+                              const phone = employee?.phone || null
+                              const phoneTel = phone ? normalizePhoneForTel(phone) : ''
+                              const waDigits = phone ? String(phone).replace(/\D/g, '') : ''
+                              const canCall = Boolean(phoneTel)
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    style={personButton}
+                                    onMouseEnter={() => !isMobile && setOpenContactId(`p_${problem.id}`)}
+                                    onMouseLeave={() => !isMobile && setOpenContactId((cur) => (cur === `p_${problem.id}` ? null : cur))}
+                                    onClick={() => handlePersonClick(`p_${problem.id}`, phoneTel)}
+                                    title={phone ? 'Показать телефон' : undefined}
+                                  >
+                                    {problem.responsible_person || 'Не назначен'}
+                                  </button>
+                                  {openContactId === `p_${problem.id}` ? (
+                                    <div style={personTooltip}>
+                                      <div style={{ fontWeight: 900 }}>{problem.responsible_person || 'Не назначен'}</div>
+                                      <div style={metaLine}>{phoneTel || 'Телефон не указан'}</div>
+                                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                                        <a
+                                          href={canCall ? `tel:${phoneTel}` : undefined}
+                                          style={{ ...callLink, pointerEvents: canCall ? 'auto' : 'none', opacity: canCall ? 1 : 0.45 }}
+                                        >
+                                          📞 Позвонить
+                                        </a>
+                                        {employee?.phone && (
+                                          <a
+                                            href={`https://wa.me/${waDigits}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{
+                                              backgroundColor: '#25D366',
+                                              color: 'white',
+                                              padding: '6px 12px',
+                                              borderRadius: '6px',
+                                              textDecoration: 'none',
+                                              fontSize: '13px',
+                                              marginLeft: '8px',
+                                            }}
+                                          >
+                                            WhatsApp
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </>
+                              )
+                            })()}
                           </div>
                         </td>
                         <td style={cell}><span style={severityStyle(problem.severity)}>{severityLabel(problem.severity)}</span></td>
@@ -2153,7 +2174,7 @@ export default function Page() {
                               style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(problem.watched === true ? watchedIcon : {}) }}
                               title="Взять на контроль"
                               aria-label="Взять на контроль"
-                              onClick={() => void toggleWatch(problem.id)}
+                              onClick={() => void toggleWatch(problem.id, problem.watched)}
                             >
                               👁
                             </button>
@@ -2315,7 +2336,7 @@ export default function Page() {
                                                   style={{ ...secondaryMiniButton, minWidth: 44, minHeight: 44, ...(problem.watched === true ? watchedIcon : {}) }}
                                                   title="На контроль"
                                                   aria-label="На контроль"
-                                                  onClick={() => void toggleWatch(problem.id)}
+                                                  onClick={() => void toggleWatch(problem.id, problem.watched)}
                                                 >
                                                   👁
                                                 </button>
@@ -2406,7 +2427,7 @@ export default function Page() {
                                                         style={{ ...actionIconButton, width: actionIconSize, height: actionIconSize, ...(problem.watched === true ? watchedIcon : {}) }}
                                                         title="На контроль"
                                                         aria-label="На контроль"
-                                                        onClick={() => void toggleWatch(problem.id)}
+                                                        onClick={() => void toggleWatch(problem.id, problem.watched)}
                                                       >
                                                         👁
                                                       </button>
