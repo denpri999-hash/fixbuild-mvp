@@ -484,6 +484,111 @@ export default function Page() {
     }
   }, [companyId])
 
+  // Для работы Realtime нужно включить Replication в Supabase:
+  // Database → Replication → problems → ВКЛ
+  useEffect(() => {
+    if (!companyId) return
+
+    const channel = supabase
+      .channel('problems-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'problems',
+          filter: `company_id=eq.${companyId}`,
+        },
+        (payload: any) => {
+          console.log('REALTIME EVENT:', payload.eventType, payload)
+
+          const applyDeadlineToState = (id: string, deadlineValue: any) => {
+            const day = String(deadlineValue || '').slice(0, 10)
+            setDeadlines((prev) => {
+              const next = { ...prev }
+              if (day) next[id] = day
+              else delete next[id]
+              return next
+            })
+          }
+
+          if (payload.eventType === 'UPDATE') {
+            const updated = payload.new as any
+            if (!updated?.id) return
+
+            // normalize watched so UI doesn't lose it
+            updated.watched = updated.watched ?? false
+
+            applyDeadlineToState(updated.id, updated.deadline)
+
+            if (updated.is_active === false) {
+              // Задача закрыта — убрать из активных
+              setProblems((prev) => prev.filter((p) => p.id !== updated.id))
+              setClosedProblems((prev) => {
+                const exists = prev.find((p) => p.id === updated.id)
+                if (exists) return prev.map((p) => (p.id === updated.id ? ({ ...p, ...updated } as any) : p))
+                return [...prev, { ...updated }]
+              })
+            } else if (updated.is_active === true) {
+              // Задача переоткрыта — добавить в активные
+              setClosedProblems((prev) => prev.filter((p) => p.id !== updated.id))
+              setProblems((prev) => {
+                const exists = prev.find((p) => p.id === updated.id)
+                if (exists) {
+                  return prev.map((p) => (p.id === updated.id ? ({ ...p, ...updated } as any) : p))
+                }
+                return [...prev, { ...updated }]
+              })
+            } else {
+              // Обновление полей (deadline, watched и т.д.)
+              setProblems((prev) => prev.map((p) => (p.id === updated.id ? ({ ...p, ...updated } as any) : p)))
+              setClosedProblems((prev) => prev.map((p) => (p.id === updated.id ? ({ ...p, ...updated } as any) : p)))
+            }
+          }
+
+          if (payload.eventType === 'INSERT') {
+            const newProblem = payload.new as any
+            if (!newProblem?.id) return
+            newProblem.watched = newProblem.watched ?? false
+            applyDeadlineToState(newProblem.id, newProblem.deadline)
+
+            if (newProblem.is_active !== false) {
+              setProblems((prev) => {
+                const exists = prev.find((p) => p.id === newProblem.id)
+                if (exists) return prev
+                return [newProblem, ...prev]
+              })
+            } else {
+              setClosedProblems((prev) => {
+                const exists = prev.find((p) => p.id === newProblem.id)
+                if (exists) return prev
+                return [newProblem, ...prev]
+              })
+            }
+          }
+
+          if (payload.eventType === 'DELETE') {
+            const oldRow = payload.old as any
+            if (!oldRow?.id) return
+            setProblems((prev) => prev.filter((p) => p.id !== oldRow.id))
+            setClosedProblems((prev) => prev.filter((p) => p.id !== oldRow.id))
+            setDeadlines((prev) => {
+              const next = { ...prev }
+              delete next[oldRow.id]
+              return next
+            })
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('REALTIME STATUS:', status)
+      })
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [companyId])
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mq = window.matchMedia('(max-width: 767px)')
@@ -1706,22 +1811,7 @@ export default function Page() {
           <section style={panelR} id="active-issues">
             <div style={panelHeader}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={sectionTitle}>Активные проблемы</div>
-                  <span
-                    style={{
-                      backgroundColor: '#EF4444',
-                      color: 'white',
-                      borderRadius: '12px',
-                      padding: '2px 8px',
-                      fontSize: '14px',
-                      marginLeft: '8px',
-                      fontWeight: 900,
-                    }}
-                  >
-                    {problems.length}
-                  </span>
-                </div>
+                <div style={sectionTitle}>Активные проблемы · {problems.length}</div>
                 <div style={sectionSubTitle}>Открытые проблемы и риски по всем объектам</div>
               </div>
               <div style={actionRow}>
