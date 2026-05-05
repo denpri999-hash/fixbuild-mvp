@@ -1190,9 +1190,14 @@ export default function Page() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: problemId, company_id: companyId, updates: { watched: newWatched } }),
     })
-    const json = await res.json().catch(() => null)
-    const data = json?.data
-    const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
+    const result = await res.json().catch(() => null)
+    console.log('UPDATE RESULT:', result)
+    if (result?.error) {
+      console.error('UPDATE ERROR:', result.error)
+      return
+    }
+    const data = result?.data
+    const error = !res.ok ? (result?.error || { message: 'Request failed' }) : result?.error
     console.log('SUPABASE RESULT:', { data, error })
     if (error) {
       console.error('watch update:', error)
@@ -1247,9 +1252,14 @@ export default function Page() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: problemId, company_id: companyId, updates: { deadline: date } }),
     })
-    const json = await res.json().catch(() => null)
-    const data = json?.data
-    const error = !res.ok ? (json?.error || { message: 'Request failed' }) : json?.error
+    const result = await res.json().catch(() => null)
+    console.log('UPDATE RESULT:', result)
+    if (result?.error) {
+      console.error('UPDATE ERROR:', result.error)
+      return
+    }
+    const data = result?.data
+    const error = !res.ok ? (result?.error || { message: 'Request failed' }) : result?.error
     console.log('SUPABASE RESULT:', { data, error })
 
     if (error) {
@@ -1267,11 +1277,11 @@ export default function Page() {
     if (employee?.phone) {
       const projectName = problem.project_name || '—'
       const stage = problem.stage || '—'
-      const humanDate = formatDeadlineLabel(date)
+      const deadline = formatDeadlineLabel(date)
       const message =
-        `Добрый день, ${rp}!\n\n` +
-        `По задаче '${problem.title}', объект: ${projectName}, \n` +
-        `этап: ${stage} — установлен срок выполнения: ${humanDate}.\n` +
+        `Добрый день, ${employee.name}! По задаче "${problem.title}", \n` +
+        `объект: ${projectName}, этап: ${stage} — \n` +
+        `установлен срок выполнения: ${deadline}. \n` +
         `Пожалуйста, выполните в указанный срок.`
       try {
         const r = await fetch('/api/whatsapp/send', {
@@ -1279,8 +1289,12 @@ export default function Page() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ companyId, phone: employee.phone, message }),
         })
-        if (!r.ok) showToast('Срок сохранён, не удалось отправить WhatsApp')
+        if (!r.ok) {
+          console.log('WHATSAPP SEND:', { phone: employee.phone, message })
+          showToast('Срок сохранён, не удалось отправить WhatsApp')
+        }
       } catch {
+        console.log('WHATSAPP SEND:', { phone: employee.phone, message })
         showToast('Срок сохранён, не удалось отправить WhatsApp')
       }
     }
