@@ -468,13 +468,10 @@ export default function Page() {
   }
   useEffect(() => {
     if (companyId) {
+      console.log('companyId loaded:', companyId)
       setSelectedProject('all')
-      fetchAll()
+      fetchAll() // загружать данные только после companyId
     }
-  }, [companyId])
-
-  useEffect(() => {
-    console.log('companyId on save:', companyId)
   }, [companyId])
 
   useEffect(() => {
@@ -1106,7 +1103,7 @@ export default function Page() {
   }
 
   const closeProblem = async (problemId: string) => {
-    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+    if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
     }
@@ -1151,7 +1148,7 @@ export default function Page() {
   }
 
   const reopenProblem = async (problemId: string) => {
-    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+    if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
     }
@@ -1177,7 +1174,7 @@ export default function Page() {
   }
 
   const toggleWatch = async (problemId: string) => {
-    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+    if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
     }
@@ -1234,12 +1231,12 @@ export default function Page() {
     setDeadlineDraft(deadlines[problemId] || problemDeadlineDay(p))
   }
 
-  async function saveDeadline(problem: Problem) {
-    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+  async function saveDeadline(problem: Problem, dateOverride?: string) {
+    if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
     }
-    const date = deadlineDraft
+    const date = (dateOverride ?? deadlineDraft)
     if (!date) {
       setDeadlineEditingId(null)
       return
@@ -1302,7 +1299,7 @@ export default function Page() {
   }
 
   async function clearDeadline(problem: Problem) {
-    if (!companyId || companyId === '00000000-0000-0000-0000-000000000001') {
+    if (!companyId) {
       console.error('Invalid companyId, skipping save')
       return
     }
@@ -1782,9 +1779,17 @@ export default function Page() {
 
                         {deadlineEditingId === problem.id ? (
                           <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                            <input style={dateInput} type="date" value={deadlineDraft} onChange={(e) => setDeadlineDraft(e.target.value)} />
-                            <button style={secondaryButton} onClick={() => saveDeadline(problem)}>ОК</button>
-                            <button style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                            <input
+                              style={dateInput}
+                              type="date"
+                              value={deadlineDraft}
+                              onChange={(e) => {
+                                const next = e.target.value
+                                setDeadlineDraft(next)
+                                void saveDeadline(problem, next)
+                              }}
+                            />
+                            <button type="button" style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
                           </div>
                         ) : null}
                       </div>
@@ -1946,9 +1951,17 @@ export default function Page() {
                           </div>
                           {deadlineEditingId === problem.id ? (
                             <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                              <input style={dateInput} type="date" value={deadlineDraft} onChange={(e) => setDeadlineDraft(e.target.value)} />
-                              <button style={secondaryButton} onClick={() => saveDeadline(problem)}>ОК</button>
-                              <button style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                              <input
+                                style={dateInput}
+                                type="date"
+                                value={deadlineDraft}
+                                onChange={(e) => {
+                                  const next = e.target.value
+                                  setDeadlineDraft(next)
+                                  void saveDeadline(problem, next)
+                                }}
+                              />
+                              <button type="button" style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
                             </div>
                           ) : null}
                         </td>
