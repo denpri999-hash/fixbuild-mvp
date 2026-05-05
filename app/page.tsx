@@ -1831,9 +1831,11 @@ export default function Page() {
                     <option key={stage} value={stage}>Этап: {stage}</option>
                   ))}
                 </select>
-                <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('all')}>Все</button>
-                <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('red')}>Проблемы</button>
-                <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('yellow')}>Риски</button>
+                <div style={isMobile ? { display: 'flex', flexDirection: 'row', gap: 8 } : undefined}>
+                  <button style={problemFilter === 'all' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('all')}>Все</button>
+                  <button style={problemFilter === 'red' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('red')}>Проблемы</button>
+                  <button style={problemFilter === 'yellow' ? activeFilterButton : filterButton} onClick={() => setProblemFilter('yellow')}>Риски</button>
+                </div>
               </div>
             </div>
 
@@ -1954,6 +1956,20 @@ export default function Page() {
                           <button
                             type="button"
                             style={secondaryMiniButton}
+                            title="Запросить обновление"
+                            aria-label="Запросить обновление"
+                            onClick={() => {
+                              const project = problem.project_name || 'объект'
+                              const stage = problem.stage || 'этап'
+                              const text = `Добрый день! Нужен статус по объекту ${project}, этап: ${stage}. Напишите актуальный статус текущей ситуации.`
+                              setUpdateModal({ title: 'Запрос обновления', text })
+                            }}
+                          >
+                            🔄
+                          </button>
+                          <button
+                            type="button"
+                            style={secondaryMiniButton}
                             onClick={() => void closeProblem(problem.id)}
                           >
                             Закрыть
@@ -1981,13 +1997,8 @@ export default function Page() {
                                 const date = pendingDeadline[problem.id]
                                 if (!date) return
                                 const year = parseInt((date.split('-')[0] || '').trim())
-                                if (year < 2024 || year > 2030) {
-                                  alert(`Неправильный год: ${year}. Введите дату заново.`)
-                                  setPendingDeadline((prev) => {
-                                    const next = { ...prev }
-                                    delete next[problem.id]
-                                    return next
-                                  })
+                                if (year < 2024 || year > 2035) {
+                                  alert('Проверьте год в дате: ' + year)
                                   return
                                 }
                                 void saveDeadline(problem, date)
@@ -2375,13 +2386,8 @@ export default function Page() {
                                                       const date = pendingDeadline[problem.id]
                                                       if (!date) return
                                                       const year = parseInt((date.split('-')[0] || '').trim())
-                                                      if (year < 2024 || year > 2030) {
-                                                        alert(`Неправильный год: ${year}. Введите дату заново.`)
-                                                        setPendingDeadline((prev) => {
-                                                          const next = { ...prev }
-                                                          delete next[problem.id]
-                                                          return next
-                                                        })
+                                                      if (year < 2024 || year > 2035) {
+                                                        alert('Проверьте год в дате: ' + year)
                                                         return
                                                       }
                                                       void saveDeadline(problem, date)
@@ -2554,13 +2560,8 @@ export default function Page() {
                                                             const date = pendingDeadline[problem.id]
                                                             if (!date) return
                                                             const year = parseInt((date.split('-')[0] || '').trim())
-                                                            if (year < 2024 || year > 2030) {
-                                                              alert(`Неправильный год: ${year}. Введите дату заново.`)
-                                                              setPendingDeadline((prev) => {
-                                                                const next = { ...prev }
-                                                                delete next[problem.id]
-                                                                return next
-                                                              })
+                                                            if (year < 2024 || year > 2035) {
+                                                              alert('Проверьте год в дате: ' + year)
                                                               return
                                                             }
                                                             void saveDeadline(problem, date)
