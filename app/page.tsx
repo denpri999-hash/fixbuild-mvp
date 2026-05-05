@@ -224,6 +224,7 @@ export default function Page() {
   const [removingProblemIds, setRemovingProblemIds] = useState<Record<string, boolean>>({})
   const [deadlineEditingId, setDeadlineEditingId] = useState<string | null>(null)
   const [deadlineDraft, setDeadlineDraft] = useState<string>('')
+  const [pendingDeadline, setPendingDeadline] = useState<Record<string, string>>({})
   const [updateModal, setUpdateModal] = useState<{ title: string; text: string } | null>(null)
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [tgEnabledLocal, setTgEnabledLocal] = useState(false)
@@ -1233,6 +1234,11 @@ export default function Page() {
     const p = problems.find((x) => x.id === problemId)
     setDeadlineEditingId(problemId)
     setDeadlineDraft(deadlines[problemId] || problemDeadlineDay(p))
+    setPendingDeadline((prev) => {
+      const next = { ...prev }
+      next[problemId] = prev[problemId] || deadlines[problemId] || problemDeadlineDay(p) || ''
+      return next
+    })
   }
 
   async function saveDeadline(problem: Problem, dateOverride?: string) {
@@ -1275,36 +1281,36 @@ export default function Page() {
     setDeadlines((prev) => ({ ...prev, [problem.id]: date }))
     setDeadlineEditingId(null)
 
-    const rp = (problem.responsible_person || '').trim()
-    const employee = rp ? employees.find((e) => (e.name || '').trim() === rp) : undefined
+    const employee = employees.find((e) =>
+      (e.name || '').toLowerCase().trim() === (problem.responsible_person || '').toLowerCase().trim()
+    )
+    console.log('EMPLOYEE FOUND:', employee)
+    console.log('ALL EMPLOYEES:', employees)
+
     if (employee?.phone) {
-      const projectName = problem.project_name || '—'
-      const stage = problem.stage || '—'
-      const deadline = formatDate(String(date || '').slice(0, 10))
       const message =
-        `Добрый день, ${employee.name}! По задаче "${problem.title}", \n` +
-        `объект: ${projectName}, этап: ${stage} — \n` +
-        `установлен срок выполнения: ${deadline}. \n` +
+        `Добрый день, ${employee.name}! ` +
+        `По задаче "${problem.title}", ` +
+        `объект: ${problem.project_name || '—'}, ` +
+        `этап: ${problem.stage || '—'} — ` +
+        `установлен срок выполнения: ${date}. ` +
         `Пожалуйста, выполните в указанный срок.`
+
+      console.log('SENDING TO:', employee.phone, message)
+
       try {
         console.log('SENDING WHATSAPP TO:', employee.phone, message)
         const r = await fetch('/api/whatsapp/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            companyId,
-            phone: employee.phone,
-            message: message,
-          }),
+          body: JSON.stringify({ companyId, phone: employee.phone, message }),
         })
         const waResult = await r.json().catch(() => null)
         console.log('WHATSAPP RESULT:', waResult)
         if (!r.ok) {
-          console.log('WHATSAPP SEND:', { phone: employee.phone, message })
           showToast('Срок сохранён, не удалось отправить WhatsApp')
         }
       } catch {
-        console.log('WHATSAPP SEND:', { phone: employee.phone, message })
         showToast('Срок сохранён, не удалось отправить WhatsApp')
       }
     }
@@ -1795,14 +1801,47 @@ export default function Page() {
                             <input
                               style={dateInput}
                               type="date"
-                              value={deadlineDraft}
+                              value={pendingDeadline[problem.id] || deadlines[problem.id] || ''}
                               onChange={(e) => {
                                 const next = e.target.value
-                                setDeadlineDraft(next)
-                                void saveDeadline(problem, next)
+                                setPendingDeadline((prev) => ({
+                                  ...prev,
+                                  [problem.id]: next,
+                                }))
                               }}
                             />
-                            <button type="button" style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                            <button
+                              type="button"
+                              style={secondaryButton}
+                              onClick={() => {
+                                const date = pendingDeadline[problem.id]
+                                if (!date) return
+                                const year = date.split('-')[0] || ''
+                                if (year.length !== 4) return
+                                void saveDeadline(problem, date)
+                                setPendingDeadline((prev) => {
+                                  const next = { ...prev }
+                                  delete next[problem.id]
+                                  return next
+                                })
+                              }}
+                            >
+                              ОК
+                            </button>
+                            <button
+                              type="button"
+                              style={secondaryButton}
+                              onClick={() => {
+                                setDeadlineEditingId(null)
+                                setPendingDeadline((prev) => {
+                                  const next = { ...prev }
+                                  delete next[problem.id]
+                                  return next
+                                })
+                              }}
+                            >
+                              Отмена
+                            </button>
                           </div>
                         ) : null}
                       </div>
@@ -1967,14 +2006,47 @@ export default function Page() {
                               <input
                                 style={dateInput}
                                 type="date"
-                                value={deadlineDraft}
+                                value={pendingDeadline[problem.id] || deadlines[problem.id] || ''}
                                 onChange={(e) => {
                                   const next = e.target.value
-                                  setDeadlineDraft(next)
-                                  void saveDeadline(problem, next)
+                                  setPendingDeadline((prev) => ({
+                                    ...prev,
+                                    [problem.id]: next,
+                                  }))
                                 }}
                               />
-                              <button type="button" style={secondaryButton} onClick={() => setDeadlineEditingId(null)}>Отмена</button>
+                              <button
+                                type="button"
+                                style={secondaryButton}
+                                onClick={() => {
+                                  const date = pendingDeadline[problem.id]
+                                  if (!date) return
+                                  const year = date.split('-')[0] || ''
+                                  if (year.length !== 4) return
+                                  void saveDeadline(problem, date)
+                                  setPendingDeadline((prev) => {
+                                    const next = { ...prev }
+                                    delete next[problem.id]
+                                    return next
+                                  })
+                                }}
+                              >
+                                ОК
+                              </button>
+                              <button
+                                type="button"
+                                style={secondaryButton}
+                                onClick={() => {
+                                  setDeadlineEditingId(null)
+                                  setPendingDeadline((prev) => {
+                                    const next = { ...prev }
+                                    delete next[problem.id]
+                                    return next
+                                  })
+                                }}
+                              >
+                                Отмена
+                              </button>
                             </div>
                           ) : null}
                         </td>
