@@ -97,31 +97,31 @@ const role = 'admin'
 type DashboardTab = 'problems' | 'events' | 'photos' | 'closed' | 'history' | 'journal'
 
 function BrandHeader({ isMobile }: { isMobile: boolean }) {
-  const iconSize = isMobile ? 24 : 36
-  const titleSize = isMobile ? '16px' : '24px'
+  const iconSize = isMobile ? 24 : 44
+  const titleSize = isMobile ? '16px' : '26px'
   const showSubtitle = !isMobile
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
       <svg
         width={iconSize}
         height={iconSize}
-        viewBox="0 0 32 32"
+        viewBox="0 0 44 44"
         xmlns="http://www.w3.org/2000/svg"
-        style={{ flexShrink: 0, filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.15))' }}
+        style={{ flexShrink: 0 }}
       >
-        <rect width="32" height="32" rx="6" fill="#1E293B" />
+        <rect width="44" height="44" rx="10" fill="#0F172A" />
         <path
-          d="M16 5 L27 12 L27 27 L5 27 L5 12 Z"
+          d="M22 8 L36 16 L36 36 L8 36 L8 16 Z"
           fill="none"
           stroke="white"
-          strokeWidth="2"
+          strokeWidth="2.5"
           strokeLinejoin="round"
         />
         <path
-          d="M11 18 L14 22 L21 13"
+          d="M15 25 L19 30 L29 19"
           fill="none"
-          stroke="#16A34A"
-          strokeWidth="2.5"
+          stroke="#22C55E"
+          strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -142,7 +142,7 @@ function BrandHeader({ isMobile }: { isMobile: boolean }) {
           FixBuild
         </div>
         {showSubtitle ? (
-          <div style={{ fontWeight: 500, fontSize: '13px', color: '#64748B', lineHeight: '1.2' }}>
+          <div style={{ fontWeight: 600, fontSize: '13px', color: '#2563EB', lineHeight: '1.2', letterSpacing: '0.1px' }}>
             Контроль проблем и сроков
           </div>
         ) : null}
@@ -1777,7 +1777,7 @@ export default function Page() {
 
         {errorText ? <div style={errorBox}>{errorText}</div> : null}
 
-        <div style={clientModeBox}>Режим клиента: данные вашей компании</div>
+        <div style={{ ...clientModeBox, display: 'none' }}>Режим клиента: данные вашей компании</div>
 
         {/* KPI */}
         <section style={kpiGridR}>
