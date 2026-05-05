@@ -259,7 +259,10 @@ export default function Page() {
     if (error) throw error
     const rows = (data || []) as Problem[]
     const normalized = rows.map((p) => ({ ...p, watched: p.watched ?? false }))
-    setProblems(normalized)
+    const active = normalized.filter((p) => p.status === 'open' && p.is_active !== false)
+    const closed = normalized.filter((p) => p.status === 'closed' || p.is_active === false)
+    setProblems(active)
+    setClosedProblems(closed)
     const loadedDeadlines: Record<string, string> = {}
     normalized.forEach((p) => {
       if (p.deadline) loadedDeadlines[p.id] = problemDeadlineDay(p)
@@ -602,18 +605,8 @@ export default function Page() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
   }, [activeProblemsBase])
 
-  const closedProblemsComputed = useMemo(() => {
-    return problems
-      .filter((p) => p.status === 'closed' || p.is_active === false)
-      .filter((p) => selectedProject === 'all' || p.project_name === selectedProject)
-      .filter((p) => isInsideDateRange(p.last_seen_at, dateFrom, dateTo))
-      .slice(0, 30)
-  }, [problems, selectedProject, dateFrom, dateTo])
-
   const [closedProblems, setClosedProblems] = useState<Problem[]>([])
-  useEffect(() => {
-    setClosedProblems(closedProblemsComputed)
-  }, [closedProblemsComputed])
+  const watchedCount = useMemo(() => problems.filter((p) => p.watched === true).length, [problems])
 
   const filteredProblems = useMemo(() => {
     const result = activeProblemsBase
@@ -1138,7 +1131,21 @@ export default function Page() {
         return
       }
 
-      setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      const closedProblem = problems.find((p) => p.id === problemId)
+      if (closedProblem) {
+        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+        setClosedProblems((prev) => [
+          ...prev,
+          {
+            ...closedProblem,
+            is_active: false,
+            status: 'closed',
+            closed_at: new Date().toISOString(),
+          },
+        ])
+      } else {
+        setProblems((prev) => prev.filter((p) => p.id !== problemId))
+      }
       setDeadlines((prev) => {
         const next = { ...prev }
         delete next[problemId]
@@ -1178,7 +1185,21 @@ export default function Page() {
     }
 
     if (res.ok) {
-      setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
+      const reopenedProblem = closedProblems.find((p) => p.id === problemId)
+      if (reopenedProblem) {
+        setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
+        setProblems((prev) => [
+          ...prev,
+          {
+            ...reopenedProblem,
+            is_active: true,
+            status: 'open',
+            closed_at: null,
+          },
+        ])
+      } else {
+        setClosedProblems((prev) => prev.filter((p) => p.id !== problemId))
+      }
     }
   }
 
@@ -1715,7 +1736,27 @@ export default function Page() {
                   style={issuesViewMode === 'control' ? toggleActive : toggleButton}
                   onClick={() => setIssuesViewMode('control')}
                 >
-                  Контроль
+                  Контроль{watchedCount > 0 ? (
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minWidth: 18,
+                        height: 18,
+                        padding: '0 6px',
+                        borderRadius: 999,
+                        background: issuesViewMode === 'control' ? 'rgba(255,255,255,0.22)' : '#dbeafe',
+                        color: issuesViewMode === 'control' ? '#fff' : '#1d4ed8',
+                        fontSize: 12,
+                        fontWeight: 900,
+                        lineHeight: '18px',
+                      }}
+                    >
+                      {watchedCount}
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   style={issuesViewMode === 'list' ? toggleActive : toggleButton}
