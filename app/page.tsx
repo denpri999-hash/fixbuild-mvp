@@ -119,13 +119,11 @@ function formatDateTime(value: string | null) {
   }
 }
 
-function formatDate(value: string | null) {
-  if (!value) return '-'
-  try {
-    return new Date(value).toLocaleDateString('ru-RU')
-  } catch {
-    return value
-  }
+function formatDateUi(dateStr: string | null | undefined) {
+  if (!dateStr) return ''
+  const [year, month, day] = String(dateStr).split('-')
+  if (!year || !month || !day) return String(dateStr)
+  return `${day}.${month}.${year}`
 }
 
 function severityLabel(value: Severity) {
@@ -168,6 +166,13 @@ function resolveMediaUrl(row: { photo_url?: string | null; media_url?: string | 
 export default function Page() {
   const router = useRouter()
   const { companyId, loading: companyLoading } = useCompany()
+
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return ''
+    const [year, month, day] = dateStr.split('-')
+    if (!year || !month || !day) return dateStr
+    return `${day}.${month}.${year}`
+  }
 
   const [isMobile, setIsMobile] = useState(false)
   const [lightbox, setLightbox] = useState<{
@@ -976,14 +981,14 @@ export default function Page() {
           url,
           title: m.problem_title || 'Фото',
           projectName: m.project_name || 'Без объекта',
-          at: formatDateTime(m.created_at),
+          at: formatDate(String(m.created_at || '').slice(0, 10)),
         })
       }
     }
     if (items.length === 0) {
-      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDateTime(event.at) }]
+      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDate(String(event.at || '').slice(0, 10)) }]
     } else if (!items.some((x) => x.url === primary)) {
-      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDateTime(event.at) }, ...items]
+      items = [{ url: primary, title: event.title, projectName: event.projectName, at: formatDate(String(event.at || '').slice(0, 10)) }, ...items]
     }
     const index = Math.max(0, items.findIndex((x) => x.url === primary))
     setLightbox({ index, items })
@@ -1209,11 +1214,7 @@ export default function Page() {
   }
 
   function formatDeadlineLabel(value: string) {
-    try {
-      return new Date(value).toLocaleDateString('ru-RU')
-    } catch {
-      return value
-    }
+    return formatDate(String(value || '').slice(0, 10))
   }
 
   function isDeadlineOverdue(value: string) {
@@ -1279,18 +1280,25 @@ export default function Page() {
     if (employee?.phone) {
       const projectName = problem.project_name || '—'
       const stage = problem.stage || '—'
-      const deadline = formatDeadlineLabel(date)
+      const deadline = formatDate(String(date || '').slice(0, 10))
       const message =
         `Добрый день, ${employee.name}! По задаче "${problem.title}", \n` +
         `объект: ${projectName}, этап: ${stage} — \n` +
         `установлен срок выполнения: ${deadline}. \n` +
         `Пожалуйста, выполните в указанный срок.`
       try {
+        console.log('SENDING WHATSAPP TO:', employee.phone, message)
         const r = await fetch('/api/whatsapp/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companyId, phone: employee.phone, message }),
+          body: JSON.stringify({
+            companyId,
+            phone: employee.phone,
+            message: message,
+          }),
         })
+        const waResult = await r.json().catch(() => null)
+        console.log('WHATSAPP RESULT:', waResult)
         if (!r.ok) {
           console.log('WHATSAPP SEND:', { phone: employee.phone, message })
           showToast('Срок сохранён, не удалось отправить WhatsApp')
@@ -1747,7 +1755,7 @@ export default function Page() {
                         {deadlineDayForUi(problem) ? (
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlineDayForUi(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                              ⏰ Срок: {formatDeadlineLabel(deadlineDayForUi(problem))}
+                              ⏰ Срок: {formatDate(String(deadlineDayForUi(problem) || '').slice(0, 10))}
                             </div>
                             <button
                               type="button"
@@ -1849,7 +1857,7 @@ export default function Page() {
                           {deadlineDayForUi(problem) ? (
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <div style={{ ...tinyCellText, color: isDeadlineOverdue(deadlineDayForUi(problem)) ? '#DC2626' : '#D97706', fontWeight: 900 }}>
-                                ⏰ Срок: {formatDeadlineLabel(deadlineDayForUi(problem))}
+                                ⏰ Срок: {formatDate(String(deadlineDayForUi(problem) || '').slice(0, 10))}
                               </div>
                               <button
                                 type="button"
@@ -1900,7 +1908,7 @@ export default function Page() {
                                   url: problem.photo_url!,
                                   title: problem.title,
                                   projectName: problem.project_name || 'Без объекта',
-                                  at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                  at: formatDate(String(problem.last_seen_at || problem.first_seen_at || '').slice(0, 10)),
                                 }],
                               })}
                             >
@@ -2042,7 +2050,7 @@ export default function Page() {
                                                       url: problem.photo_url!,
                                                       title: problem.title,
                                                       projectName: problem.project_name || 'Без объекта',
-                                                      at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                      at: formatDate(String(problem.last_seen_at || problem.first_seen_at || '').slice(0, 10)),
                                                     }],
                                                   })}
                                                 >
@@ -2085,7 +2093,7 @@ export default function Page() {
                                                             url: problem.photo_url!,
                                                             title: problem.title,
                                                             projectName: problem.project_name || 'Без объекта',
-                                                            at: formatDateTime(problem.last_seen_at || problem.first_seen_at),
+                                                            at: formatDate(String(problem.last_seen_at || problem.first_seen_at || '').slice(0, 10)),
                                                           }],
                                                         })}
                                                       >
@@ -2171,7 +2179,7 @@ export default function Page() {
                   <div style={listTitleSmall}>{event.title}</div>
                   <span style={eventTypePill(event.type)}>{eventLabel(event.type)}</span>
                 </div>
-                <div style={metaLine}>{event.projectName} · {formatDateTime(event.at)}</div>
+                <div style={metaLine}>{event.projectName} · {formatDate(String(event.at || '').slice(0, 10))}</div>
                 {event.personName ? (
                   <div style={{ marginTop: 6 }}>
                     <div style={personCellWrap}>
@@ -2251,7 +2259,7 @@ export default function Page() {
                         url: resolveMediaUrl(m) || m.photo_url,
                         title: m.problem_title || 'Фото',
                         projectName: m.project_name || 'Без объекта',
-                        at: formatDateTime(m.created_at),
+                        at: formatDate(String(m.created_at || '').slice(0, 10)),
                       }))
                       const index = Math.max(0, filteredMedia.findIndex((m) => m.id === item.id))
                       setLightbox({ index, items })
@@ -2264,7 +2272,7 @@ export default function Page() {
                   <div style={photoMeta}>
                     <div style={metaLine}>{item.project_name || 'Без проекта'}</div>
                     <div style={listTitleSmall}>{item.problem_title || 'Фото'}</div>
-                    <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                    <div style={metaLine}>{formatDate(String(item.created_at || '').slice(0, 10))}</div>
                   </div>
                 </div>
               ))}</div>
@@ -2290,7 +2298,7 @@ export default function Page() {
                     <div style={{ ...metaLine, marginTop: 6 }}>
                       {problem.project_name || 'Без объекта'} · {problem.stage || 'прочее'}
                     </div>
-                    <div style={{ ...metaLine, marginTop: 6 }}>Закрыто: {formatDateTime(problem.last_seen_at)}</div>
+                    <div style={{ ...metaLine, marginTop: 6 }}>Закрыто: {formatDate(String(problem.closed_at || problem.last_seen_at || '').slice(0, 10))}</div>
                     {role === 'admin' ? (
                       <button
                         type="button"
@@ -2330,7 +2338,7 @@ export default function Page() {
                         <td style={cell}>{problem.material || 'не указан'}</td>
                         <td style={cell}>{problem.reason || 'прочее'}</td>
                         <td style={cell}>{problem.responsible_person || 'Не указан'}</td>
-                        <td style={cell}>{formatDateTime(problem.last_seen_at)}</td>
+                        <td style={cell}>{formatDate(String(problem.closed_at || problem.last_seen_at || '').slice(0, 10))}</td>
                         <td style={cell}><button style={secondaryMiniButton} onClick={() => { setHistoryModalProblem(problem); setSelectedProblemForHistory(problem.id) }}>История</button></td>
                         <td style={cell}>{role === 'admin' ? <button style={secondaryMiniButton} onClick={() => reopenProblem(problem.id)} disabled={reopeningId === problem.id}>{reopeningId === problem.id ? 'Открываем...' : 'Переоткрыть'}</button> : null}</td>
                       </tr>
@@ -2413,7 +2421,7 @@ export default function Page() {
                                       <span style={{ color }}>{label}</span>
                                       {item.projectName ? <span style={{ color: '#334155' }}> · <strong>{item.projectName}</strong></span> : null}
                                     </div>
-                                    <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                                    <div style={metaLine}>{formatDate(String(item.created_at || '').slice(0, 10))}</div>
                                     <div style={taskSummary}>{item.event}</div>
                                     {item.comment ? <div style={metaLine}>Комментарий: {item.comment}</div> : null}
                                   </div>
@@ -2459,7 +2467,7 @@ export default function Page() {
                         <td style={cell}>{task.sender_name || 'Не указан'}</td>
                         <td style={cell}>{task.project_name || '-'}</td>
                         <td style={cellStrong}>{task.title}</td>
-                        <td style={cell}>{formatDate(task.updated_at || task.planned_date)}</td>
+                        <td style={cell}>{formatDate(String(task.updated_at || task.planned_date || '').slice(0, 10))}</td>
                         <td style={cell}><span style={taskStatusStyle(task.color_indicator)}>{taskStatusText(task.color_indicator)}</span></td>
                         <td style={cell}>{sanitizeJournalComment(task.ai_summary) || '-'}</td>
                         <td style={cell}>
@@ -2473,7 +2481,7 @@ export default function Page() {
                               url: task.photo_url!,
                               title: task.title,
                               projectName: task.project_name || 'Без объекта',
-                              at: formatDateTime(task.updated_at || task.planned_date),
+                              at: formatDate(String(task.updated_at || task.planned_date || '').slice(0, 10)),
                             }],
                           })}
                         >
@@ -2748,7 +2756,7 @@ export default function Page() {
               <div style={modalList}>{modalHistory.map((item) => (
                 <div key={item.id} style={listItem}>
                   <div style={listTitle}>{item.event}</div>
-                  <div style={metaLine}>{formatDateTime(item.created_at)}</div>
+                  <div style={metaLine}>{formatDate(String(item.created_at || '').slice(0, 10))}</div>
                   {item.comment ? <div style={taskSummary}>Комментарий: {item.comment}</div> : null}
                 </div>
               ))}</div>
@@ -2955,7 +2963,7 @@ function ReportCard({
   blockers: Problem[]
   durationDays: (p: Problem) => number
 }) {
-  const updatedAt = useMemo(() => formatDateTime(new Date().toISOString()), [])
+  const updatedAt = useMemo(() => formatDateUi(new Date().toISOString().slice(0, 10)), [])
   const title = useMemo(() => String(reportText || '').split('\n')[0] || 'Отчёт директору', [reportText])
 
   return (
