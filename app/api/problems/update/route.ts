@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     )
   }
 
+  console.log('PROBLEMS UPDATE:', { id, company_id, updates })
   const { data, error } = await supabase
     .from('problems')
     .update(updates)
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
     .eq('company_id', company_id)
     .select()
 
+  console.log('PROBLEMS UPDATE RESULT:', { data, error })
   return NextResponse.json({ data, error })
 }
 

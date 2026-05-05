@@ -258,9 +258,10 @@ export default function Page() {
     const { data, error } = await query
     if (error) throw error
     const rows = (data || []) as Problem[]
-    setProblems(rows)
+    const normalized = rows.map((p) => ({ ...p, watched: p.watched ?? false }))
+    setProblems(normalized)
     const loadedDeadlines: Record<string, string> = {}
-    rows.forEach((p) => {
+    normalized.forEach((p) => {
       if (p.deadline) loadedDeadlines[p.id] = problemDeadlineDay(p)
     })
     setDeadlines(loadedDeadlines)
@@ -1190,8 +1191,11 @@ export default function Page() {
     const problem = problems.find((x) => x.id === problemId)
     if (!problem) return
     const newWatched = !(problem.watched === true)
+    const prevWatched = Boolean(problem.watched)
     const value = newWatched
     console.log('SAVING TO SUPABASE:', { problemId, companyId, value })
+    // optimistic update so "Контроль" reacts instantly
+    setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: newWatched } : p)))
     const res = await fetch('/api/problems/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1201,6 +1205,8 @@ export default function Page() {
     console.log('UPDATE RESULT:', result)
     if (result?.error) {
       console.error('UPDATE ERROR:', result.error)
+      // rollback optimistic update
+      setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: prevWatched } : p)))
       return
     }
     const data = result?.data
@@ -1209,9 +1215,12 @@ export default function Page() {
     if (error) {
       console.error('watch update:', error)
       showToast('Не удалось обновить контроль')
+      // rollback optimistic update
+      setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: prevWatched } : p)))
       return
     }
-    setProblems((prev) => prev.map((p) => (p.id === problemId ? { ...p, watched: newWatched } : p)))
+    // ensure latest server state
+    void fetchAll()
   }
 
   function formatDeadlineLabel(value: string) {
@@ -1290,6 +1299,7 @@ export default function Page() {
       const rName = (problem.responsible_person || '').toLowerCase().trim()
       return eName === rName || eName.includes(rName) || rName.includes(eName)
     })
+    console.log('EMPLOYEE FOR WHATSAPP:', employee)
     console.log('EMPLOYEE FOUND:', employee)
     console.log('ALL EMPLOYEES:', employees)
 
